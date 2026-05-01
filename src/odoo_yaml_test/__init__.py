@@ -14,8 +14,6 @@ Example:
     ...         self.run_yaml_scenario("test_data.yaml")
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from .exceptions import YamlAssertionError, YamlConfigurationError, YamlStepError

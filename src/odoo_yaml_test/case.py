@@ -5,13 +5,11 @@ importable in environments where Odoo is not installed (CI linting,
 unit-testing the evaluator, etc.).
 """
 
-from __future__ import annotations
-
 import inspect
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, FrozenSet, Optional
 
 from .evaluator import safe_eval
 from .exceptions import YamlAssertionError, YamlConfigurationError, YamlStepError
@@ -24,9 +22,9 @@ _LOGGER = logging.getLogger("odoo_yaml_test")
 _XML_ID_RE = re.compile(r"^[a-z_][a-z0-9_]*\.[A-Za-z0-9_.]+$")
 
 #: Relational ORM field types.
-_RELATIONAL_TYPES: frozenset[str] = frozenset({"many2one", "one2many", "many2many", "reference"})
+_RELATIONAL_TYPES: FrozenSet[str] = frozenset({"many2one", "one2many", "many2many", "reference"})
 
-_VALID_OPERATORS: frozenset[str] = frozenset(
+_VALID_OPERATORS: FrozenSet[str] = frozenset(
     {
         "equals",
         "not_equals",
@@ -79,7 +77,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
     """
 
     #: Per-scenario record registry. Reset at the start of each scenario.
-    registry: dict[str, Any]
+    registry: Dict[str, Any]
 
     def setUp(self) -> None:
         super().setUp()
@@ -141,7 +139,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
             raise YamlConfigurationError(f"YAML file {filename!r} not found at {resolved}")
         return resolved
 
-    def _run_scenario(self, scenario: dict[str, Any], yaml_file: str) -> None:
+    def _run_scenario(self, scenario: Dict[str, Any], yaml_file: str) -> None:
         """Execute every step in *scenario*."""
         scenario_name = scenario["name"]
         for index, step in enumerate(scenario["steps"]):
@@ -167,7 +165,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
                     f"{type(exc).__name__}: {exc}"
                 ) from exc
 
-    def _dispatch_step(self, step: dict[str, Any]) -> None:
+    def _dispatch_step(self, step: Dict[str, Any]) -> None:
         """Dispatch a single step to the matching action handler."""
         action = step.get("action")
         if not action:
@@ -183,7 +181,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
     # Action handlers
     # ------------------------------------------------------------------
 
-    def _action_create(self, step: dict[str, Any]) -> None:
+    def _action_create(self, step: Dict[str, Any]) -> None:
         """Handle ``action: create``."""
         model_name = self._require(step, "model")
         values = self._require(step, "values", expected_type=dict)
@@ -195,7 +193,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         if save_as:
             self.registry[save_as] = record
 
-    def _action_write(self, step: dict[str, Any]) -> None:
+    def _action_write(self, step: Dict[str, Any]) -> None:
         """Handle ``action: write``."""
         target = self._require(step, "target")
         values = self._require(step, "values", expected_type=dict)
@@ -205,7 +203,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         resolved_values = self._resolve_values(values, record_in_env)
         record_in_env.write(resolved_values)
 
-    def _action_call(self, step: dict[str, Any]) -> None:
+    def _action_call(self, step: Dict[str, Any]) -> None:
         """Handle ``action: call``."""
         target = self._require(step, "target")
         method_name = self._require(step, "method")
@@ -227,20 +225,20 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         if asserts:
             self._run_asserts(record_in_env, asserts)
 
-    def _action_assert(self, step: dict[str, Any]) -> None:
+    def _action_assert(self, step: Dict[str, Any]) -> None:
         """Handle ``action: assert``."""
         target = self._require(step, "target")
         asserts = self._require(step, "asserts", expected_type=dict)
         record = self._resolve_target(target)
         self._run_asserts(record, asserts)
 
-    def _action_ref(self, step: dict[str, Any]) -> None:
+    def _action_ref(self, step: Dict[str, Any]) -> None:
         """Handle ``action: ref``."""
         xml_id = self._require(step, "xml_id")
         save_as = self._require(step, "save_as")
         self.registry[save_as] = self.env.ref(xml_id)
 
-    def _action_search(self, step: dict[str, Any]) -> None:
+    def _action_search(self, step: Dict[str, Any]) -> None:
         """Handle ``action: search``."""
         model_name = self._require(step, "model")
         domain = self._require(step, "domain", expected_type=list)
@@ -266,7 +264,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
     # Assertions
     # ------------------------------------------------------------------
 
-    def _run_asserts(self, record: Any, asserts: dict[str, Any]) -> None:
+    def _run_asserts(self, record: Any, asserts: Dict[str, Any]) -> None:
         """Run a mapping of ``field_name -> spec`` assertions on *record*."""
         if not isinstance(asserts, dict):
             raise YamlConfigurationError(
@@ -281,7 +279,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
                 raise YamlConfigurationError(f"Unknown assert type: {assert_type!r}")
             method(record, field_name, spec)
 
-    def _assert_value(self, record: Any, field_name: str, spec: dict[str, Any]) -> None:
+    def _assert_value(self, record: Any, field_name: str, spec: Dict[str, Any]) -> None:
         """``type: value`` — comparison-operator assertion."""
         operator = spec.get("operator", "equals")
         if operator not in _VALID_OPERATORS:
@@ -342,7 +340,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         if operator == "is_falsy" and actual:
             raise YamlAssertionError(f"{record._name}.{field_name}: expected falsy, got {actual!r}")
 
-    def _assert_m2o(self, record: Any, field_name: str, spec: dict[str, Any]) -> None:
+    def _assert_m2o(self, record: Any, field_name: str, spec: Dict[str, Any]) -> None:
         """``type: m2o`` — compares the related id with ``self.env.ref``."""
         expected_xml_id = spec.get("expected_xml_id")
         if not expected_xml_id:
@@ -355,16 +353,16 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
                 f"(id={expected_record.id}), got id={actual.id}"
             )
 
-    def _assert_o2m(self, record: Any, field_name: str, spec: dict[str, Any]) -> None:
+    def _assert_o2m(self, record: Any, field_name: str, spec: Dict[str, Any]) -> None:
         """``type: o2m`` — count or membership assertion."""
         self._assert_relation(record, field_name, spec, kind="o2m")
 
-    def _assert_m2m(self, record: Any, field_name: str, spec: dict[str, Any]) -> None:
+    def _assert_m2m(self, record: Any, field_name: str, spec: Dict[str, Any]) -> None:
         """``type: m2m`` — count or membership assertion."""
         self._assert_relation(record, field_name, spec, kind="m2m")
 
     def _assert_relation(
-        self, record: Any, field_name: str, spec: dict[str, Any], kind: str
+        self, record: Any, field_name: str, spec: Dict[str, Any], kind: str
     ) -> None:
         check = spec.get("check", "count")
         recordset = getattr(record, field_name)
@@ -412,7 +410,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
             )
         return self.registry[target]
 
-    def _build_env(self, step: dict[str, Any], record: Any = None) -> Any:
+    def _build_env(self, step: Dict[str, Any], record: Any = None) -> Any:
         """Return an Odoo ``env`` honoring ``context`` / ``as_user`` keys."""
         env = self.env
         as_user = step.get("as_user")
@@ -426,7 +424,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         return env
 
     @staticmethod
-    def _require(step: dict[str, Any], key: str, expected_type: type | None = None) -> Any:
+    def _require(step: Dict[str, Any], key: str, expected_type: Optional[type] = None) -> Any:
         if key not in step:
             raise YamlConfigurationError(
                 f"Step {step.get('step')!r} (action={step.get('action')!r}) "
@@ -444,7 +442,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
     # Dynamic value resolution
     # ------------------------------------------------------------------
 
-    def _resolve_values(self, values: dict[str, Any], model: Any) -> dict[str, Any]:
+    def _resolve_values(self, values: Dict[str, Any], model: Any) -> Dict[str, Any]:
         """Resolve a ``values`` dict against *model*'s field definitions."""
         resolved: dict[str, Any] = {}
         fields_get = model.fields_get(list(values.keys()), attributes=["type"])
@@ -453,7 +451,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
             resolved[field_name] = self._resolve_value_recursive(raw_value, field_type)
         return resolved
 
-    def _resolve_value_recursive(self, value: Any, field_type: str | None) -> Any:
+    def _resolve_value_recursive(self, value: Any, field_type: Optional[str]) -> Any:
         """Recursively resolve *value*, honoring prefixes and nesting."""
         if isinstance(value, str):
             return self._parse_dynamic_value(value, field_type)
@@ -463,7 +461,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
             return [self._resolve_value_recursive(item, None) for item in value]
         return value
 
-    def _parse_dynamic_value(self, value: str, field_type: str | None) -> Any:
+    def _parse_dynamic_value(self, value: str, field_type: Optional[str]) -> Any:
         """Apply the prefix rules to a single string *value*."""
         if value.startswith("EVAL:"):
             expression = value[len("EVAL:") :].strip()

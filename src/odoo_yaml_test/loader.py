@@ -4,17 +4,15 @@ Only :func:`yaml.safe_load` is used; arbitrary Python object construction
 through PyYAML tags is never permitted.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Union
 
 import yaml
 
 from .exceptions import YamlConfigurationError
 
 
-def load_yaml_file(path: str | Path) -> dict[str, Any]:
+def load_yaml_file(path: Union[str, Path]) -> Dict[str, Any]:
     """Load a YAML file and return the parsed mapping.
 
     Args:
@@ -52,7 +50,7 @@ def load_yaml_file(path: str | Path) -> dict[str, Any]:
     return data
 
 
-def validate_scenarios_document(data: dict[str, Any], source: str) -> list[dict[str, Any]]:
+def validate_scenarios_document(data: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
     """Validate the top-level document and return its scenario list.
 
     Args:

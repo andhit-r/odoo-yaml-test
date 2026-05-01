@@ -12,12 +12,10 @@ The whitelist exists to prevent accidental damage and obvious sandbox
 escapes, not to make untrusted YAML safe to execute.
 """
 
-from __future__ import annotations
-
 import ast
 import datetime as _datetime
 from decimal import Decimal
-from typing import Any, Mapping
+from typing import Any, Dict, FrozenSet, Mapping, Optional
 
 try:  # python-dateutil is a runtime dep; keep import resilient for typing-only contexts
     from dateutil.relativedelta import relativedelta
@@ -27,7 +25,7 @@ except ImportError:  # pragma: no cover - dateutil is in install_requires
 from .exceptions import YamlConfigurationError
 
 #: Names that may appear in an ``EVAL:`` expression.
-_ALLOWED_GLOBALS: dict[str, Any] = {
+_ALLOWED_GLOBALS: Dict[str, Any] = {
     "datetime": _datetime.datetime,
     "date": _datetime.date,
     "time": _datetime.time,
@@ -49,7 +47,7 @@ if relativedelta is not None:
 
 #: Callables that must never be reachable, even if a name happens to be
 #: re-exported through a whitelisted module.
-_FORBIDDEN_CALLABLE_NAMES: frozenset[str] = frozenset(
+_FORBIDDEN_CALLABLE_NAMES: FrozenSet[str] = frozenset(
     {
         "__import__",
         "compile",
@@ -70,7 +68,7 @@ _FORBIDDEN_CALLABLE_NAMES: frozenset[str] = frozenset(
 )
 
 
-def _validate_ast(tree: ast.AST, allowed_names: frozenset[str]) -> None:
+def _validate_ast(tree: ast.AST, allowed_names: FrozenSet[str]) -> None:
     """Walk *tree* and reject any node that is not safe.
 
     Raises:
@@ -131,7 +129,7 @@ def _validate_ast(tree: ast.AST, allowed_names: frozenset[str]) -> None:
             )
 
 
-def safe_eval(expression: str, locals_dict: Mapping[str, Any] | None = None) -> Any:
+def safe_eval(expression: str, locals_dict: Optional[Mapping[str, Any]] = None) -> Any:
     """Safely evaluate *expression* with a restricted namespace.
 
     Args:

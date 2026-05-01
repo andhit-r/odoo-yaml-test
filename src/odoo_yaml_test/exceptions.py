@@ -1,7 +1,5 @@
 """Custom exception types raised by odoo-yaml-test."""
 
-from __future__ import annotations
-
 
 class YamlTestError(Exception):
     """Base class for all errors raised by odoo-yaml-test."""
