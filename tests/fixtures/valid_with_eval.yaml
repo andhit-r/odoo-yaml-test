@@ -1,0 +1,11 @@
+scenarios:
+  - name: "EVAL usage"
+    steps:
+      - step: "Create order"
+        action: "create"
+        model: "sale.order"
+        save_as: "so_1"
+        values:
+          partner_id: "REF: base.res_partner_1"
+          date_order: "EVAL: datetime.now()"
+          name: "SO-001"

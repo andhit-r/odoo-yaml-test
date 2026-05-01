@@ -1,0 +1,9 @@
+scenarios:
+  - name: "Basic scenario"
+    steps:
+      - step: "Create a partner"
+        action: "create"
+        model: "res.partner"
+        save_as: "p1"
+        values:
+          name: "Test Partner"

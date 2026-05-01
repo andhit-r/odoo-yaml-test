@@ -1,0 +1,5 @@
+scenarios:
+  - name: "Missing action"
+    steps:
+      - step: "no action key"
+        model: "res.partner"

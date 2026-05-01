@@ -1,0 +1,153 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "odoo-yaml-test"
+version = "0.1.0"
+description = "Data-driven unit testing framework for Odoo using YAML scenarios."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Andhitia Rama", email = "andhitia.r@gmail.com" },
+]
+maintainers = [
+    { name = "Andhitia Rama", email = "andhitia.r@gmail.com" },
+]
+keywords = [
+    "odoo",
+    "testing",
+    "unittest",
+    "yaml",
+    "data-driven",
+    "test-framework",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: Odoo",
+    "Framework :: Odoo :: 14.0",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Testing :: Unit",
+    "Typing :: Typed",
+]
+dependencies = [
+    "PyYAML>=5.4",
+    "python-dateutil>=2.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.0",
+    "mypy>=1.4",
+    "pre-commit>=3.0",
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.5",
+    "twine>=4.0",
+    "types-PyYAML",
+    "types-python-dateutil",
+]
+
+[project.urls]
+Homepage = "https://github.com/andhitia/odoo-yaml-test"
+Source = "https://github.com/andhitia/odoo-yaml-test"
+Issues = "https://github.com/andhitia/odoo-yaml-test/issues"
+Changelog = "https://github.com/andhitia/odoo-yaml-test/blob/main/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+odoo_yaml_test = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "S",   # flake8-bandit
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "PL",  # pylint
+    "RUF", # ruff-specific
+]
+ignore = [
+    "PLR0913", # too many arguments
+    "PLR2004", # magic value (noisy in tests/asserts)
+    "S101",    # assert use (legitimate in tests)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR", "D", "SIM117"]
+"src/odoo_yaml_test/case.py" = ["PLR0911", "PLR0912", "PLR0915"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+show_error_codes = true
+exclude = [
+    "tests/fixtures/",
+    "build/",
+    "dist/",
+]
+
+[[tool.mypy.overrides]]
+module = ["odoo.*", "dateutil.*", "yaml"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=odoo_yaml_test",
+    "--cov-report=term-missing",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["odoo_yaml_test"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
+]

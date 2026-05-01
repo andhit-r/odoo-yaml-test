@@ -1,0 +1,11 @@
+include LICENSE
+include README.md
+include CHANGELOG.md
+include pyproject.toml
+include MANIFEST.in
+recursive-include src/odoo_yaml_test *.py py.typed
+recursive-include tests *.py *.yaml
+recursive-include docs *.md
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
