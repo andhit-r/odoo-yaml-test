@@ -14,8 +14,7 @@ Example:
     ...         self.run_yaml_scenario("test_data.yaml")
 """
 
-from typing import Any
-
+from .case import YamlTransactionCase
 from .exceptions import YamlAssertionError, YamlConfigurationError, YamlStepError
 
 __version__ = "0.1.0"
@@ -27,18 +26,3 @@ __all__ = [
     "YamlTransactionCase",
     "__version__",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    """Lazy import for :class:`YamlTransactionCase`.
-
-    Importing the class eagerly would require Odoo at install time, which
-    breaks linting and unit-testing the package itself in non-Odoo
-    environments. The lazy import defers the Odoo dependency until the
-    class is actually referenced.
-    """
-    if name == "YamlTransactionCase":
-        from .case import YamlTransactionCase
-
-        return YamlTransactionCase
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
