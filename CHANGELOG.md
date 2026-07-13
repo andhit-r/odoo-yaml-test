@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-13
+
+Everything in this release is additive. No existing key, prefix, action, or
+assertion type changed meaning — YAML written against 0.1.0 keeps working.
+
+### Fixed
+- **Assertion failures now report where they happened.** `_run_scenario` caught
+  `YamlAssertionError` and re-raised it bare, so the file/scenario/step context
+  promised in the README was added to *every* failure except the most common
+  one. Failures still surface as `AssertionError` (unittest reports FAIL, not
+  ERROR); they simply say which step failed now.
+
+### Added
+- **`REC:` prefix** for referencing records saved earlier in a scenario.
+  `REC: so_1` yields the record, `REC: so_1.id` the integer id, and
+  `REC: so_1.partner_id.name` walks the relation. This replaces the
+  `EVAL: registry['so_1'].id` spelling, which accounted for 87% of all `EVAL:`
+  use across the SSI corpus. `EVAL:` is *not* deprecated — it remains the tool
+  for arithmetic, dates, and anything needing real Python.
+- **Built-in registry aliases** `company` and `user`, seeded from `env.company`
+  and `env.user` at the start of every scenario. A `save_as` of the same name
+  still wins.
+- **Recordsets are coerced to what a field expects** in `create`/`write`: a
+  record assigned to a `many2one` becomes its id; to an x2many, a `(6, 0, ids)`
+  command. Only applied where the field type is known — never in domains, args,
+  or kwargs.
+- **Dynamic prefixes are now allowed in `asserts`.** Previously documented as
+  unsupported. This revives the relational assertion types: `m2o` accepts
+  `expected: "REC: partner"` alongside the existing `expected_xml_id`, and
+  `o2m`/`m2m` gain `check: contains` / `check: exact` with `expected_records`.
+- **Dotted paths in assertion field names** — `partner_id.name:` reads across a
+  relation. Traversing an empty relation is a test failure, not a config error.
+- **`as_user` accepts a registry alias**, not just an xml_id — so a user created
+  inside the scenario can be used directly. Previously the only way to test as a
+  non-admin user was to fabricate an `ir.model.data` row mid-scenario.
+- **`as_user` and `context` now apply to `assert` and `ref`**, matching every
+  other action. SSI policy fields are user-sensitive, so this was a real gap.
+- **`expect_error`** on `create` / `write` / `call` / `unlink` / `wizard` /
+  `form`, with an optional `message_contains`. The block runs inside a cursor
+  savepoint, so an expected `ValidationError` no longer poisons the rest of the
+  transaction. Exception names resolve from a fixed whitelist.
+- **`unlink` action**, so delete guards and `force_unlink` are reachable.
+- **`wizard` action** — creates a transient with `active_model` / `active_id` /
+  `active_ids` in the context the way the UI does, then calls a method on it.
+  This makes SSI's cancel/terminate reason wizards testable; an explicit
+  `context:` still wins over the defaults. Note the target key is `target:`, not
+  `on:` — YAML 1.1 parses a bare `on:` key as the boolean `True`.
+- **`form` action** — drives Odoo's `Form` API, which is the only way to
+  exercise `@api.onchange`. Supports an ordered `values:` mapping for the common
+  case and an `ops:` list (`set` / `new` / `edit` / `remove` / `assert`) when
+  assignment order matters, a field must be set twice to re-fire an onchange, or
+  x2many lines are built inline. `asserts` run against the pending form, before
+  `save()`. Note that form values take *records*, not ids — `partner_id:
+  "REC: p"` (bare, no `.id`), unlike `create`.
+- **Top-level `setup:` block**, replayed before each scenario against a freshly
+  reset registry — shared fixtures without shared state. Opt out per scenario
+  with `skip_setup: true`.
+
+- **Opt-in cache refresh** (`auto_refresh`, default **off**). When enabled, the
+  record is flushed and its cache invalidated before an assertion, so
+  non-stored computes — SSI's `confirm_ok`, `approve_ok`, … — are recomputed
+  rather than read stale. This is what the 533 manual `invalidate_cache` steps
+  across the SSI corpus are working around.
+
+  Enable per file with `options: {auto_refresh: true}`, per scenario, per step
+  (`refresh: true`), or with `auto_refresh = True` on the test class.
+
+  **It is off by default on purpose.** Invalidating forces the field to be
+  re-read from the database, and a re-read runs the record rules that a cached
+  value never had to pass. So switching it on surfaces asserts that only ever
+  passed because nobody re-read the value. Measured against real Odoo:
+  `ssi_school` goes from 0 to **15 errors out of 79 tests**, all `AccessError`,
+  because its scenarios act `as_user: base.user_admin` on records that user
+  cannot actually read. Those tests are wrong and worth fixing — but that is
+  each module owner's call to make on their own schedule, not something a
+  library upgrade should force. Nothing changes until you opt in.
+
+  The invalidation is scoped to the asserted record's ids. Odoo's bare
+  `invalidate_cache()` empties the cache for the whole environment, which drags
+  unrelated records into the same re-read (and the same access checks).
+
 ## [0.1.0] - 2026-05-01
 
 ### Added

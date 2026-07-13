@@ -6,8 +6,14 @@ from pathlib import Path
 
 import pytest
 
+from odoo_yaml_test.case import YamlTransactionCase
 from odoo_yaml_test.exceptions import YamlConfigurationError
-from odoo_yaml_test.loader import load_yaml_file, validate_scenarios_document
+from odoo_yaml_test.loader import (
+    extract_options,
+    extract_setup_steps,
+    load_yaml_file,
+    validate_scenarios_document,
+)
 
 
 class TestLoadYamlFile:
@@ -68,3 +74,27 @@ class TestValidateScenarios:
     def test_scenario_missing_steps(self) -> None:
         with pytest.raises(YamlConfigurationError, match="must have a 'steps' list"):
             validate_scenarios_document({"scenarios": [{"name": "s1"}]}, "test.yaml")
+
+
+class TestRealWorldBackwardCompat:
+    """Guard: a real production scenario file must keep loading unchanged.
+
+    Copied verbatim from ssi-account-amortization. 298 such files exist across
+    the ssi-* repos; if this one stops validating, they all have.
+    """
+
+    def test_real_ssi_scenario_still_validates(self, fixtures_dir) -> None:
+        path = fixtures_dir / "real_ssi_amortization.yaml"
+        data = load_yaml_file(path)
+        scenarios = validate_scenarios_document(data, str(path))
+        assert len(scenarios) == 2
+        # No setup/options block: extraction must degrade to empty, not raise.
+        assert extract_setup_steps(data, str(path)) == []
+        assert extract_options(data, str(path)) == {}
+
+    def test_every_action_used_in_the_wild_has_a_handler(self, fixtures_dir) -> None:
+        path = fixtures_dir / "real_ssi_amortization.yaml"
+        scenarios = validate_scenarios_document(load_yaml_file(path), str(path))
+        actions = {step["action"] for scenario in scenarios for step in scenario["steps"]}
+        for action in actions:
+            assert hasattr(YamlTransactionCase, f"_action_{action}"), action
