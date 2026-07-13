@@ -80,4 +80,61 @@ def validate_scenarios_document(data: Dict[str, Any], source: str) -> List[Dict[
             raise YamlConfigurationError(
                 f"Scenario {scenario.get('name')!r} in {source} must have a 'steps' list"
             )
+        options = scenario.get("options")
+        if options is not None and not isinstance(options, dict):
+            raise YamlConfigurationError(
+                f"'options' in scenario {scenario.get('name')!r} of {source} must be a mapping"
+            )
     return scenarios
+
+
+def extract_setup_steps(data: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
+    """Return the optional top-level ``setup:`` steps.
+
+    Setup steps are replayed before every scenario, against a freshly reset
+    registry — so scenarios can share fixtures without sharing state.
+
+    Args:
+        data: Parsed YAML mapping.
+        source: A label identifying the source (file path) for errors.
+
+    Returns:
+        The setup step list, empty when the document declares no ``setup``.
+
+    Raises:
+        YamlConfigurationError: when ``setup`` is present but malformed.
+    """
+    setup = data.get("setup")
+    if setup is None:
+        return []
+    if not isinstance(setup, dict):
+        raise YamlConfigurationError(
+            f"'setup' in {source} must be a mapping with a 'steps' list, got {type(setup).__name__}"
+        )
+    steps = setup.get("steps")
+    if not isinstance(steps, list):
+        raise YamlConfigurationError(f"'setup.steps' in {source} must be a list")
+    return steps
+
+
+def extract_options(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Return the optional top-level ``options:`` mapping.
+
+    Args:
+        data: Parsed YAML mapping.
+        source: A label identifying the source (file path) for errors.
+
+    Returns:
+        The options mapping, empty when the document declares none.
+
+    Raises:
+        YamlConfigurationError: when ``options`` is present but not a mapping.
+    """
+    options = data.get("options")
+    if options is None:
+        return {}
+    if not isinstance(options, dict):
+        raise YamlConfigurationError(
+            f"'options' in {source} must be a mapping, got {type(options).__name__}"
+        )
+    return options

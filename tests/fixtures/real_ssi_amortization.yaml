@@ -1,0 +1,435 @@
+scenarios:
+  - name: "Account Amortization - Full Workflow (Manual Source)"
+    steps:
+      - step: "Get account type current assets"
+        action: "ref"
+        xml_id: "account.data_account_type_current_assets"
+        save_as: "account_type_assets"
+
+      - step: "Get account type expenses"
+        action: "ref"
+        xml_id: "account.data_account_type_expenses"
+        save_as: "account_type_expenses"
+
+      - step: "Create journal"
+        action: "create"
+        model: "account.journal"
+        save_as: "journal"
+        values:
+          name: "Test Amortization Journal"
+          code: "TAMRJ"
+          type: "general"
+
+      - step: "Create debit account"
+        action: "create"
+        model: "account.account"
+        save_as: "debit_account"
+        values:
+          name: "Test Prepaid Expense"
+          code: "XTAMR01"
+          user_type_id: "EVAL: registry['account_type_assets'].id"
+          reconcile: true
+
+      - step: "Create contra account"
+        action: "create"
+        model: "account.account"
+        save_as: "contra_account"
+        values:
+          name: "Test Expense"
+          code: "XTAMR02"
+          user_type_id: "EVAL: registry['account_type_expenses'].id"
+
+      - step: "Create amortization type"
+        action: "create"
+        model: "account.amortization_type"
+        save_as: "amortization_type"
+        values:
+          name: "Test Amortization Type Workflow"
+          code: "TAMRWF01"
+          direction: "dr"
+          journal_id: "EVAL: registry['journal'].id"
+          account_id: "EVAL: registry['debit_account'].id"
+          contra_account_id: "EVAL: registry['contra_account'].id"
+
+      - step: "Create amortization with manual source"
+        action: "create"
+        model: "account.amortization"
+        save_as: "amortization"
+        as_user: "base.user_admin"
+        values:
+          source: "manual"
+          date: 2024-01-01
+          date_start: 2024-02-01
+          type_id: "EVAL: registry['amortization_type'].id"
+          journal_id: "EVAL: registry['journal'].id"
+          account_id: "EVAL: registry['debit_account'].id"
+          contra_account_id: "EVAL: registry['contra_account'].id"
+          period_number: 3
+          amount: 3000.0
+
+      - step: "Assert amortization created in draft"
+        action: "assert"
+        target: "amortization"
+        asserts:
+          state:
+            type: "value"
+            expected: "draft"
+          amount:
+            type: "value"
+            expected: 3000.0
+          period_number:
+            type: "value"
+            expected: 3
+          amortized:
+            type: "value"
+            expected: false
+          amount_residual:
+            type: "value"
+            expected: 3000.0
+
+      - step: "Compute amortization schedule"
+        action: "call"
+        target: "amortization"
+        method: "action_compute_amortization_schedule"
+        as_user: "base.user_admin"
+
+      - step: "Invalidate cache after compute"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Assert schedule lines created"
+        action: "assert"
+        target: "amortization"
+        asserts:
+          schedule_ids:
+            type: "o2m"
+            check: "count"
+            expected_count: 3
+
+      - step: "Confirm amortization"
+        action: "call"
+        target: "amortization"
+        method: "action_confirm"
+        as_user: "base.user_admin"
+        asserts:
+          state:
+            type: "value"
+            expected: "confirm"
+
+      - step: "Invalidate cache after confirm"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Approve amortization (transition to open)"
+        action: "call"
+        target: "amortization"
+        method: "action_approve_approval"
+        as_user: "base.user_admin"
+        asserts:
+          state:
+            type: "value"
+            expected: "open"
+
+      - step: "Invalidate cache after approve"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Get first schedule line"
+        action: "search"
+        model: "account.amortization_schedule"
+        domain:
+          - ["amortization_id", "=", "EVAL: registry['amortization'].id"]
+        save_as: "schedule_1"
+        limit: 1
+        order: "date asc"
+
+      - step: "Assert first schedule is in draft"
+        action: "assert"
+        target: "schedule_1"
+        asserts:
+          state:
+            type: "value"
+            expected: "draft"
+          amortization_state:
+            type: "value"
+            expected: "open"
+
+      - step: "Create account move for first schedule"
+        action: "call"
+        target: "schedule_1"
+        method: "action_create_account_move"
+
+      - step: "Invalidate cache after create move"
+        action: "call"
+        target: "schedule_1"
+        method: "invalidate_cache"
+
+      - step: "Assert first schedule is posted"
+        action: "assert"
+        target: "schedule_1"
+        asserts:
+          state:
+            type: "value"
+            expected: "post"
+          move_id:
+            type: "value"
+            operator: "is_truthy"
+
+      - step: "Remove account move from first schedule"
+        action: "call"
+        target: "schedule_1"
+        method: "action_remove_account_move"
+
+      - step: "Invalidate cache after remove"
+        action: "call"
+        target: "schedule_1"
+        method: "invalidate_cache"
+
+      - step: "Assert first schedule returned to draft"
+        action: "assert"
+        target: "schedule_1"
+        asserts:
+          state:
+            type: "value"
+            expected: "draft"
+
+      - step: "Get all schedule lines"
+        action: "search"
+        model: "account.amortization_schedule"
+        domain:
+          - ["amortization_id", "=", "EVAL: registry['amortization'].id"]
+        save_as: "all_schedules"
+        order: "date asc"
+
+      - step: "Mark all schedules as manual"
+        action: "call"
+        target: "all_schedules"
+        method: "action_mark_as_manual"
+
+      - step: "Invalidate cache after mark manual"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Assert amortized is true after all manual"
+        action: "assert"
+        target: "amortization"
+        asserts:
+          amortized:
+            type: "value"
+            expected: true
+          amount_residual:
+            type: "value"
+            expected: 0.0
+
+      - step: "Unmark first schedule from manual"
+        action: "call"
+        target: "schedule_1"
+        method: "action_unmark_as_manual"
+
+      - step: "Invalidate cache after unmark"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Assert amortized is false after unmark"
+        action: "assert"
+        target: "amortization"
+        asserts:
+          amortized:
+            type: "value"
+            expected: false
+
+      - step: "Re-mark first schedule as manual"
+        action: "call"
+        target: "schedule_1"
+        method: "action_mark_as_manual"
+
+      - step: "Invalidate cache after re-mark"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Mark amortization as done"
+        action: "call"
+        target: "amortization"
+        method: "action_done"
+        as_user: "base.user_admin"
+        context:
+          bypass_policy_check: true
+        asserts:
+          state:
+            type: "value"
+            expected: "done"
+
+  - name: "Account Amortization - Compute Schedule with Single Period"
+    steps:
+      - step: "Get account type current assets"
+        action: "ref"
+        xml_id: "account.data_account_type_current_assets"
+        save_as: "account_type_assets"
+
+      - step: "Get account type expenses"
+        action: "ref"
+        xml_id: "account.data_account_type_expenses"
+        save_as: "account_type_expenses"
+
+      - step: "Create journal"
+        action: "create"
+        model: "account.journal"
+        save_as: "journal"
+        values:
+          name: "Test Amortization Journal 2"
+          code: "TAMRJ2"
+          type: "general"
+
+      - step: "Create debit account"
+        action: "create"
+        model: "account.account"
+        save_as: "debit_account"
+        values:
+          name: "Test Prepaid Expense 2"
+          code: "XTAMR03"
+          user_type_id: "EVAL: registry['account_type_assets'].id"
+          reconcile: true
+
+      - step: "Create contra account"
+        action: "create"
+        model: "account.account"
+        save_as: "contra_account"
+        values:
+          name: "Test Expense 2"
+          code: "XTAMR04"
+          user_type_id: "EVAL: registry['account_type_expenses'].id"
+
+      - step: "Create amortization type (credit direction)"
+        action: "create"
+        model: "account.amortization_type"
+        save_as: "amortization_type"
+        values:
+          name: "Test Credit Amortization Type"
+          code: "TAMRCT01"
+          direction: "cr"
+          journal_id: "EVAL: registry['journal'].id"
+          account_id: "EVAL: registry['debit_account'].id"
+          contra_account_id: "EVAL: registry['contra_account'].id"
+
+      - step: "Create amortization with 1 period"
+        action: "create"
+        model: "account.amortization"
+        save_as: "amortization"
+        as_user: "base.user_admin"
+        values:
+          source: "manual"
+          date: 2024-03-01
+          date_start: 2024-04-01
+          type_id: "EVAL: registry['amortization_type'].id"
+          journal_id: "EVAL: registry['journal'].id"
+          account_id: "EVAL: registry['debit_account'].id"
+          contra_account_id: "EVAL: registry['contra_account'].id"
+          period_number: 1
+          amount: 1500.0
+
+      - step: "Compute amortization schedule"
+        action: "call"
+        target: "amortization"
+        method: "action_compute_amortization_schedule"
+        as_user: "base.user_admin"
+
+      - step: "Invalidate cache"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Assert single schedule line created"
+        action: "assert"
+        target: "amortization"
+        asserts:
+          schedule_ids:
+            type: "o2m"
+            check: "count"
+            expected_count: 1
+
+      - step: "Get schedule line"
+        action: "search"
+        model: "account.amortization_schedule"
+        domain:
+          - ["amortization_id", "=", "EVAL: registry['amortization'].id"]
+        save_as: "schedule"
+        limit: 1
+
+      - step: "Assert schedule amount equals total"
+        action: "assert"
+        target: "schedule"
+        asserts:
+          amount:
+            type: "value"
+            expected: 1500.0
+
+      - step: "Confirm amortization"
+        action: "call"
+        target: "amortization"
+        method: "action_confirm"
+        as_user: "base.user_admin"
+
+      - step: "Invalidate cache"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Approve amortization (to open)"
+        action: "call"
+        target: "amortization"
+        method: "action_approve_approval"
+        as_user: "base.user_admin"
+
+      - step: "Invalidate cache after approve"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Create account move for schedule (credit direction)"
+        action: "call"
+        target: "schedule"
+        method: "action_create_account_move"
+
+      - step: "Invalidate cache after move"
+        action: "call"
+        target: "schedule"
+        method: "invalidate_cache"
+
+      - step: "Assert schedule is posted"
+        action: "assert"
+        target: "schedule"
+        asserts:
+          state:
+            type: "value"
+            expected: "post"
+
+      - step: "Invalidate amortization cache"
+        action: "call"
+        target: "amortization"
+        method: "invalidate_cache"
+
+      - step: "Assert amortized true after posting"
+        action: "assert"
+        target: "amortization"
+        asserts:
+          amortized:
+            type: "value"
+            expected: true
+
+      - step: "Done amortization"
+        action: "call"
+        target: "amortization"
+        method: "action_done"
+        as_user: "base.user_admin"
+        context:
+          bypass_policy_check: true
+        asserts:
+          state:
+            type: "value"
+            expected: "done"

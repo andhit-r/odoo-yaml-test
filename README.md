@@ -96,37 +96,144 @@ class TestSaleOrderYAML(YamlTransactionCase):
 
 ## Action Reference
 
-| Action   | Required                 | Optional                                  | Purpose                                            |
-| -------- | ------------------------ | ----------------------------------------- | -------------------------------------------------- |
-| `create` | `model`, `values`        | `save_as`, `context`, `as_user`           | Create a record. Values are dynamically resolved.  |
-| `write`  | `target`, `values`       | `context`                                 | Update a registered record.                        |
-| `call`   | `target`, `method`       | `args`, `kwargs`, `asserts`, `context`    | Invoke a method on a registered record.            |
-| `assert` | `target`, `asserts`      |                                           | Validate a registered record's state.              |
-| `ref`    | `xml_id`, `save_as`      |                                           | Resolve a single xml_id and store the record.      |
-| `search` | `model`, `domain`, `save_as` | `limit`, `order`, `expect_count`      | Search and store the resulting recordset.          |
+Every action also accepts `as_user`, `context`, and `expect_error`.
+
+| Action   | Required                     | Optional                               | Purpose                                           |
+| -------- | ---------------------------- | -------------------------------------- | ------------------------------------------------- |
+| `create` | `model`, `values`            | `save_as`                              | Create a record. Values are dynamically resolved. |
+| `write`  | `target`, `values`           |                                        | Update a registered record.                       |
+| `call`   | `target`, `method`           | `args`, `kwargs`, `asserts`            | Invoke a method on a registered record.           |
+| `assert` | `target`, `asserts`          | `refresh`                              | Validate a registered record's state.             |
+| `unlink` | `target`                     |                                        | Delete a registered record.                       |
+| `ref`    | `xml_id`, `save_as`          |                                        | Resolve a single xml_id and store the record.     |
+| `search` | `model`, `domain`, `save_as` | `limit`, `order`, `expect_count`       | Search and store the resulting recordset.         |
+| `wizard` | `model`, `target`            | `values`, `method`, `save_as`, `asserts` | Run a transient wizard against a record.        |
+| `form`   | `model` **or** `target`      | `values` \| `ops`, `asserts`, `save`, `save_as` | Drive the Form API — the only way to test onchange. |
 
 ### Assertion Types
 
 - `value` — direct comparison. Optional `operator`: `equals` (default),
   `not_equals`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`, `contains`,
   `is_truthy`, `is_falsy`.
-- `m2o` — many-to-one. Compares against `env.ref(expected_xml_id).id`.
+- `m2o` — many-to-one. `expected` (a record, id, or any prefix) or
+  `expected_xml_id`.
 - `o2m` / `m2m` — relational. `check`: `count` (with `expected_count`),
-  `contains_xml_ids`, or `exact_xml_ids` (with `expected_xml_ids`).
+  `contains` / `exact` (with `expected_records`), or the xml_id-only
+  `contains_xml_ids` / `exact_xml_ids` (with `expected_xml_ids`).
+
+Field names may be dotted to read across a relation:
+
+```yaml
+asserts:
+  partner_id.name:
+    type: "value"
+    expected: "Acme"
+```
 
 ### Dynamic Value Prefixes
 
-Inside `values`, `args`, `kwargs`, or `domain`:
+Usable in `values`, `args`, `kwargs`, `domain`, `context`, and inside
+`asserts`:
 
+- `REC: <alias>[.<attr>…]` — a record saved earlier in this scenario.
+  `REC: so_1` is the record, `REC: so_1.id` its id, `REC: so_1.partner_id.name`
+  walks the relation. No calls or operators — use `EVAL:` for those.
 - `REF: <xml_id>` — resolves to `env.ref(xml_id).id`.
 - `RECORDSET: <xml_id>` — resolves to the record itself (not the id).
 - `EVAL: <expression>` — evaluates a Python expression in a restricted
   namespace. See **Security** below.
 
+Two aliases are always in the registry: `company` (`env.company`) and `user`
+(`env.user`). A `save_as` of the same name overrides them.
+
+In `create` and `write`, a record landing on a relational field is coerced to
+what the ORM expects — an id for `many2one`, a `(6, 0, ids)` command for
+x2many. In `form`, values are passed as *records*, because that is what the
+Form API wants.
+
 For relational fields (`many2one`, `one2many`, `many2many`,
 `reference`), a bare string matching the `module.xml_id` pattern is
 also resolved automatically. For non-relational fields, strings are
 passed through verbatim.
+
+## Testing the Unhappy Path
+
+```yaml
+- step: "Confirming without approval must be refused"
+  action: "call"
+  target: "amortization"
+  method: "action_confirm"
+  as_user: "some_non_admin_user"     # a registry alias, or an xml_id
+  expect_error:
+    type: "UserError"
+    message_contains: "not allowed"
+```
+
+The step runs inside a cursor savepoint, so an expected `ValidationError`
+rolls back cleanly instead of poisoning the rest of the transaction.
+
+## Onchange
+
+Onchange methods do not run through `create()` or `write()` — only through
+Odoo's `Form` API, which the `form` action drives:
+
+```yaml
+- step: "Changing the partner clears the type"
+  action: "form"
+  model: "sale.order"
+  save_as: "so"
+  values:                       # applied in order; each may fire an onchange
+    name: "SO001"
+    partner_id: "REC: customer" # a RECORD, not an id
+  asserts:                      # checked on the pending form, before save()
+    type_id:
+      type: "value"
+      operator: "is_falsy"
+```
+
+When assignment order matters, a field must be set twice to re-fire an
+onchange, or x2many lines are built inline, use `ops:` instead of `values:`:
+
+```yaml
+  ops:
+    - set: {partner_id: "REC: customer"}
+    - set: {partner_id: "REC: customer"}   # re-fire — a mapping can't say this
+    - new:
+        field: "order_line"
+        values:
+          product_id: "REC: product"
+          product_uom_qty: 2
+    - assert: {amount_total: {type: "value", operator: "gt", expected: 0}}
+```
+
+## Shared Fixtures
+
+A top-level `setup:` block runs before *each* scenario, against a freshly
+reset registry — so scenarios share fixtures without sharing state:
+
+```yaml
+setup:
+  steps:
+    - step: "Create journal"
+      action: "create"
+      model: "account.journal"
+      save_as: "journal"
+      values: {name: "Test", code: "TST", type: "general"}
+
+scenarios:
+  - name: "Workflow"
+    steps: [...]          # `journal` is already in the registry
+```
+
+## Cache Refresh
+
+Before every assertion (and before `search`), the record is flushed and its
+cache invalidated. Non-stored compute fields — Odoo does not invalidate them
+when a dependency like `state` changes — would otherwise be read stale.
+
+To opt out, in order of precedence: `refresh: false` on a step,
+`options: {auto_refresh: false}` on a scenario or at the top level of the
+file, or `auto_refresh = False` on the test class.
 
 ## Security: the `EVAL:` Sandbox
 

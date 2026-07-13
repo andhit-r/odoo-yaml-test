@@ -7,8 +7,19 @@ project [README](../README.md).
 ## Top-Level Structure
 
 ```yaml
+options:               # optional; file-wide settings
+  auto_refresh: true
+
+setup:                 # optional; replayed before EVERY scenario
+  steps:
+    - step: "Create journal"
+      action: "create"
+      # ...
+
 scenarios:
   - name: "Human-readable scenario name"
+    options: {}        # optional; overrides the file-level options
+    skip_setup: false  # optional
     steps:
       - step: "Human-readable step label"
         action: "create"
@@ -21,6 +32,25 @@ and `steps` (list).
 
 Each step must contain `action` and a `step` label (used in error
 messages and logs). Other keys depend on the action.
+
+### `setup`
+
+Setup steps run before each scenario, into the freshly reset registry. They
+are not run once per file: re-executing them per scenario is what preserves
+the "no cross-scenario state leakage" guarantee while removing the
+copy-paste. A scenario can opt out with `skip_setup: true`.
+
+A failure inside a setup step is reported as `-> Setup Step: '...'`, so it is
+never mistaken for a failure in the scenario body.
+
+### `options`
+
+| Key            | Default | Meaning                                       |
+| -------------- | ------- | --------------------------------------------- |
+| `auto_refresh` | `true`  | Flush + invalidate the cache before each assert |
+
+Precedence, highest first: a step's `refresh:` key, the scenario's `options`,
+the file's `options`, the test class's `auto_refresh` attribute.
 
 ## Actions
 
@@ -85,6 +115,87 @@ Runs assertions on a registered record without performing any action.
       expected_xml_id: "base.res_partner_1"
 ```
 
+### `unlink`
+
+Deletes a registered record. Pair it with `context: {force_unlink: true}` to
+exercise delete guards.
+
+```yaml
+- step: "Delete the draft"
+  action: "unlink"
+  target: "doc"
+```
+
+### `wizard`
+
+Creates a transient model with `active_model` / `active_id` / `active_ids` in
+the context — the way the web client does — and optionally calls a method on
+it. This is what makes reason-picker wizards (cancel, terminate) reachable.
+
+```yaml
+- step: "Cancel through the reason wizard"
+  action: "wizard"
+  model: "base.select_cancel_reason"
+  target: "amortization"        # the DOCUMENT; supplies the active_* context
+  values:
+    cancel_reason_id: "REC: reason"
+  method: "action_confirm"
+  asserts:                      # asserted on the document, not the wizard
+    state:
+      type: "value"
+      expected: "cancel"
+```
+
+The key is `target:`, **not** `on:` — YAML 1.1 parses a bare `on:` key as the
+boolean `True`. An explicit `context:` on the step overrides the `active_*`
+defaults.
+
+### `form`
+
+Drives Odoo's `Form` API. This is the only way to exercise `@api.onchange`:
+onchange methods do not run through `create()` or `write()`.
+
+Either `model:` (a new record) or `target:` (edit an existing one), never
+both.
+
+```yaml
+- step: "Onchange clears the type"
+  action: "form"
+  model: "appointment_schedule"
+  save_as: "sched"
+  values:                          # ordered; each assignment may fire onchange
+    title: "Test"
+    appointee_id: "REC: user_a"    # a RECORD, not an id
+  asserts:                         # run on the form, BEFORE save()
+    type_id:
+      type: "value"
+      operator: "is_falsy"
+  save: true                       # default; set false to never create
+```
+
+`values:` is sugar for a sequence of `set` ops in YAML order. When order
+matters, a field must be assigned twice to re-fire an onchange, or x2many
+lines are built inline, use `ops:` (mutually exclusive with `values:`):
+
+```yaml
+  ops:
+    - set: {appointee_id: "REC: user_a"}
+    - set: {type_id: "REC: appt_type"}
+    - set: {appointee_id: "REC: user_a"}   # re-fire the onchange
+    - assert: {type_id: {type: "value", operator: "is_falsy"}}
+    - new:
+        field: "order_line"
+        values: {product_id: "REC: product", product_uom_qty: 2}
+    - edit: {field: "order_line", index: 0, values: {product_uom_qty: 5}}
+    - remove: {field: "order_line", index: 0}
+```
+
+**Note the one wart, inherent to the Form API:** form values take *records*,
+so you write `partner_id: "REC: p"` (bare). In `create`/`write` you write
+`partner_id: "REC: p"` too, but there the record is coerced to an id for you.
+
+`save_as` requires `save: true` — there is otherwise no record to store.
+
 ### `ref`
 
 Resolves a single `xml_id` and stores the resulting record.
@@ -130,20 +241,39 @@ asserts:
 When `operator` is `is_truthy` or `is_falsy`, the `expected` key is
 ignored.
 
+### Dotted field names
+
+An assertion key may traverse relations. No Odoo field name contains a dot, so
+a dot always means traversal.
+
+```yaml
+asserts:
+  partner_id.name:
+    type: "value"
+    expected: "Acme"
+  type_id.journal_id.code:
+    type: "value"
+    expected: "TAMRJ"
+```
+
+Traversing through an empty relation is a test *failure*, not a
+configuration error.
+
 ### `m2o`
 
-Compares a many-to-one field's id with `env.ref(expected_xml_id).id`.
+Compares a many-to-one field's id against either a record (any dynamic
+prefix, or a raw id) or an xml_id. Supplying both is an error.
 
 ```yaml
 asserts:
   partner_id:
     type: "m2o"
-    expected_xml_id: "base.res_partner_1"
+    expected: "REC: customer"          # a record created earlier
+  # or, for a record that has an xml_id:
+  # expected_xml_id: "base.res_partner_1"
 ```
 
 ### `o2m` and `m2m`
-
-Three `check` modes:
 
 ```yaml
 # Count check
@@ -153,35 +283,103 @@ asserts:
     check: "count"
     expected_count: 3
 
-# Subset check (all listed xml_ids must be present)
+# Subset check (all listed records must be present)
 asserts:
-  tag_ids:
-    type: "m2m"
-    check: "contains_xml_ids"
-    expected_xml_ids:
-      - "base.tag_a"
-      - "base.tag_b"
+  order_line:
+    type: "o2m"
+    check: "contains"
+    expected_records:
+      - "REC: line_1"
+      - "REC: line_2"
 
 # Exact set check (order-insensitive equality)
 asserts:
   tag_ids:
     type: "m2m"
-    check: "exact_xml_ids"
-    expected_xml_ids:
-      - "base.tag_a"
-      - "base.tag_b"
+    check: "exact"
+    expected_records: ["REC: tag_a"]
+```
+
+The xml_id-only spellings `contains_xml_ids` / `exact_xml_ids` (with
+`expected_xml_ids`) remain valid and mean the same thing.
+
+## Expected Errors
+
+Any of `create`, `write`, `call`, `unlink`, `wizard`, and `form` accepts an
+`expect_error` mapping. The step must then raise the named exception, or the
+scenario fails.
+
+```yaml
+- step: "Duplicate code must be refused"
+  action: "create"
+  model: "account.amortization_type"
+  expect_error:
+    type: "UserError"
+    message_contains: "duplicate"     # optional substring, case-sensitive
+  values:
+    name: "Dup"
+    code: "TAMRT01"
+```
+
+`type` must name one of: `AccessDenied`, `AccessError`, `CacheMiss`,
+`MissingError`, `RedirectWarning`, `UserError`, `ValidationError`,
+`AssertionError`, `AttributeError`, `KeyError`, `TypeError`, `ValueError`.
+
+The step runs inside a cursor savepoint, so the failed write rolls back and
+later steps still run against a clean transaction. `expect_error` cannot be
+combined with `save_as` — the step is expected to fail, so there is no record
+to save.
+
+## Running as Another User
+
+`as_user` is accepted by every action. It takes an xml_id, a dynamic prefix,
+or — most usefully — a plain registry alias, so a user created inside the
+scenario can be used without inventing an xml_id for it:
+
+```yaml
+- step: "Create an approver"
+  action: "create"
+  model: "res.users"
+  save_as: "approver"
+  values:
+    name: "Approver"
+    login: "approver@example.com"
+    groups_id: [[6, 0, ["REF: base.group_user"]]]
+
+- step: "Approve as that user"
+  action: "call"
+  target: "doc"
+  method: "action_approve_approval"
+  as_user: "approver"          # <- the alias, not an xml_id
 ```
 
 ## Dynamic Value Prefixes
 
-Inside `values`, `args`, `kwargs`, or `domain`:
+Usable in `values`, `args`, `kwargs`, `domain`, `context`, and inside
+`asserts` (including `expected`).
 
-| Prefix         | Behaviour                                                                  |
-| -------------- | -------------------------------------------------------------------------- |
-| `EVAL: <expr>` | Evaluates `<expr>` in a restricted namespace (see Security in README).     |
-| `REF: <xid>`   | Returns `env.ref(xid).id` (integer).                                       |
-| `RECORDSET: <xid>` | Returns `env.ref(xid)` (the record itself).                            |
-| Plain string   | If the field is relational and the string matches `module.xml_id`, it is auto-resolved to the integer id. Otherwise passed through verbatim. |
+| Prefix              | Behaviour                                                                  |
+| ------------------- | -------------------------------------------------------------------------- |
+| `REC: <alias>`      | The record saved under `<alias>` earlier in this scenario.                 |
+| `REC: <alias>.<path>` | A plain getattr chain: `REC: so.id`, `REC: so.partner_id.name`. No calls, indexes, or operators — use `EVAL:` for those. |
+| `EVAL: <expr>`      | Evaluates `<expr>` in a restricted namespace (see Security in README).     |
+| `REF: <xid>`        | Returns `env.ref(xid).id` (integer).                                       |
+| `RECORDSET: <xid>`  | Returns `env.ref(xid)` (the record itself).                                |
+| Plain string        | If the field is relational and the string matches `module.xml_id`, it is auto-resolved to the integer id. Otherwise passed through verbatim. |
+
+Two aliases are always present in the registry: `company` (`env.company`) and
+`user` (`env.user`). A `save_as` of the same name overrides them.
+
+### Records vs ids
+
+In `create` and `write` the field type is known, so a record landing on a
+relational field is coerced for you: `many2one` gets the id, an x2many gets a
+`(6, 0, ids)` command. `REC: p` and `REC: p.id` therefore both work on a
+`many2one`.
+
+In `form`, `domain`, `args`, and `kwargs` there is no field type to consult,
+so nothing is coerced — the value arrives exactly as written. The Form API
+wants records, which is why `form` values are written bare (`REC: p`).
 
 The `EVAL:` namespace exposes:
 
@@ -191,6 +389,20 @@ The `EVAL:` namespace exposes:
 
 Anything else triggers a `YamlConfigurationError` at evaluation time.
 
+`EVAL:` remains the right tool for arithmetic, dates, and anything needing
+real Python. For the common case of "the id of a record I made earlier",
+prefer `REC:`.
+
+## Cache Refresh
+
+Before each assertion, and before each `search`, the target is flushed and its
+cache is invalidated. Non-stored compute fields are not invalidated by Odoo
+when a dependency such as `state` changes, so without this an assertion
+immediately after a state transition reads the pre-transition value.
+
+Opt out with `refresh: false` on the step, `options: {auto_refresh: false}` on
+the scenario or file, or `auto_refresh = False` on the test class.
+
 ## Error Messages
 
 When a step fails, the error message has this shape:
@@ -198,6 +410,15 @@ When a step fails, the error message has this shape:
 ```
 Error in File: /path/to/scenarios.yaml -> Scenario: 'B2B' -> Step: 'Confirm' (action=call): ValidationError: Cannot confirm: missing line
 ```
+
+Assertion failures carry the same prefix, and stay `AssertionError`s so
+unittest reports them as failures rather than errors:
+
+```
+Error in File: /path/to/scenarios.yaml -> Scenario: 'B2B' -> Step: 'Check state' (action=assert): sale.order.state: expected 'sale', got 'draft'
+```
+
+A failure inside a `setup:` step reads `-> Setup Step: '...'` instead.
 
 The original exception is chained via `raise ... from e`, so the full
 traceback is still visible in pytest output.
