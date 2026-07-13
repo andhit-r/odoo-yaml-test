@@ -393,15 +393,32 @@ Anything else triggers a `YamlConfigurationError` at evaluation time.
 real Python. For the common case of "the id of a record I made earlier",
 prefer `REC:`.
 
-## Cache Refresh
+## Cache Refresh (opt-in, default off)
 
-Before each assertion, and before each `search`, the target is flushed and its
-cache is invalidated. Non-stored compute fields are not invalidated by Odoo
-when a dependency such as `state` changes, so without this an assertion
-immediately after a state transition reads the pre-transition value.
+With `auto_refresh` on, the target is flushed and its cache invalidated before
+each assertion and each `search`. Non-stored compute fields are not
+invalidated by Odoo when a dependency such as `state` changes, so without this
+an assertion immediately after a state transition reads the pre-transition
+value — which is what the manual `invalidate_cache` steps scattered through
+the SSI corpus exist to work around.
 
-Opt out with `refresh: false` on the step, `options: {auto_refresh: false}` on
-the scenario or file, or `auto_refresh = False` on the test class.
+Opt in with `refresh: true` on a step, `options: {auto_refresh: true}` on a
+scenario or file, or `auto_refresh = True` on the test class.
+
+### Why it defaults to off
+
+Invalidating means the field must be re-read from the database. A re-read runs
+the record rules that the cached value never had to pass. So enabling this can
+turn a passing assertion into an `AccessError` — not because the library
+broke, but because the assertion was only ever passing on a stale cache.
+
+This is not hypothetical: enabling it on `ssi_school` turns 0 failures into 15
+`AccessError`s out of 79 tests, because those scenarios act
+`as_user: base.user_admin` on `school_enrollment` records that Mitchell Admin
+has no record-rule access to read.
+
+Treat a new failure after opting in as a real finding about the scenario (or
+the module's security rules), not as a library bug.
 
 ## Error Messages
 

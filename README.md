@@ -225,15 +225,35 @@ scenarios:
     steps: [...]          # `journal` is already in the registry
 ```
 
-## Cache Refresh
+## Cache Refresh (opt-in)
 
-Before every assertion (and before `search`), the record is flushed and its
-cache invalidated. Non-stored compute fields — Odoo does not invalidate them
-when a dependency like `state` changes — would otherwise be read stale.
+Non-stored compute fields are not invalidated by Odoo when a dependency like
+`state` changes, so an assertion right after a state transition can read a
+stale value. Turn on `auto_refresh` and the record is flushed and its cache
+invalidated before each assertion:
 
-To opt out, in order of precedence: `refresh: false` on a step,
-`options: {auto_refresh: false}` on a scenario or at the top level of the
-file, or `auto_refresh = False` on the test class.
+```yaml
+options:
+  auto_refresh: true      # per file
+scenarios:
+  - name: "..."
+    options: {auto_refresh: true}    # or per scenario
+    steps:
+      - step: "..."
+        action: "assert"
+        refresh: true                 # or per step
+```
+
+or `auto_refresh = True` on the test class.
+
+**It is off by default, deliberately.** Invalidating forces the field to be
+re-read from the database, and a re-read runs the record rules that a cached
+value never had to pass. Switching it on therefore surfaces assertions that
+only ever passed because nobody re-read the value — in one real SSI module,
+15 of 79 passing tests turn into `AccessError`, because the scenarios act
+`as_user` on records that user cannot actually read. Those tests are wrong,
+but fixing them is a decision for the module owner, not a side effect of
+upgrading this library.
 
 ## Security: the `EVAL:` Sandbox
 

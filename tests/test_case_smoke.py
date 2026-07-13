@@ -95,8 +95,23 @@ class FakeRecord:
     def flush(self) -> None:
         self.flushed += 1
 
-    def invalidate_cache(self) -> None:
-        self._cache.clear()
+    def invalidate_cache(self, fnames=None, ids=None) -> None:
+        """Mirror Odoo's signature.
+
+        With no ``ids`` Odoo empties the cache for the WHOLE environment, not
+        just this record — that over-broad sweep forced unrelated records to be
+        re-read under a restricted user and blew up with AccessError against
+        real Odoo. The fake records that here so a scoped call stays scoped.
+        """
+        if ids is None:
+            for record in self.env.created:
+                record._cache.clear()
+                record.env.cache_sweeps += 1
+            self.env.cache_sweeps += 1
+            return
+        for record in self.env.created:
+            if record.id in ids:
+                record._cache.clear()
 
     # -- methods driven by scenarios -----------------------------------
 
@@ -191,6 +206,8 @@ class FakeEnv:
         self._refs: dict[str, FakeRecord] = {}
         self.cr = FakeCursor()
         self.created: list[FakeRecord] = []
+        # Counts env-wide cache sweeps — the collateral damage we must not cause.
+        self.cache_sweeps = 0
         self.uid = user
 
         base = FakeModel("res.company", self)
@@ -994,21 +1011,29 @@ scenarios:
             expected: "confirm"
 """
 
-    def test_default_on_reads_fresh_values(self, tmp_path: Path) -> None:
+    def test_enabled_reads_fresh_values(self, tmp_path: Path) -> None:
         path = _write_yaml(tmp_path, self._YAML.format(auto_refresh="true"))
         case = _make_case(tmp_path)
         _run(case, path)  # must not raise: the cache was invalidated
 
-    def test_disabled_reads_the_stale_cache(self, tmp_path: Path) -> None:
-        """Proves the feature actually fires — with it off, the assert fails."""
-        path = _write_yaml(tmp_path, self._YAML.format(auto_refresh="false"))
+    def test_default_is_off_so_the_stale_cache_is_read(self, tmp_path: Path) -> None:
+        """The default must stay OFF — turning it on breaks existing suites.
+
+        Enabling the refresh forces a re-read from the database, and a re-read
+        runs record rules a cached value never had to pass. Against real Odoo
+        that turned 15 of ssi_school's 79 passing tests into AccessError. So the
+        library ships with the old (cache-reading) behaviour, and authors opt in
+        per file when they are ready to fix what it uncovers.
+        """
+        no_options = self._YAML.replace("options:\n  auto_refresh: {auto_refresh}\n", "")
+        path = _write_yaml(tmp_path, no_options)
         case = _make_case(tmp_path)
         with mock.patch.object(case, "_resolve_yaml_path", return_value=path):
             with pytest.raises(YamlAssertionError) as excinfo:
                 case.run_yaml_scenario(str(path))
         assert "got 'draft'" in str(excinfo.value)
 
-    def test_per_step_refresh_false_overrides_file_default(self, tmp_path: Path) -> None:
+    def test_per_step_refresh_overrides_the_default(self, tmp_path: Path) -> None:
         path = _write_yaml(
             tmp_path,
             """
@@ -1025,28 +1050,74 @@ scenarios:
         action: "call"
         target: "so"
         method: "action_confirm_stale"
-      - step: "assert stale on purpose"
+      - step: "assert fresh on purpose"
         action: "assert"
         target: "so"
-        refresh: false
+        refresh: true
         asserts:
           state:
             type: "value"
-            expected: "draft"
+            expected: "confirm"
 """,
         )
         case = _make_case(tmp_path)
-        _run(case, path)  # must not raise: we asked for the stale value
+        _run(case, path)  # must not raise: we asked for the fresh value
 
-    def test_class_attribute_disables_refresh(self, tmp_path: Path) -> None:
+    def test_class_attribute_enables_refresh(self, tmp_path: Path) -> None:
+        no_options = self._YAML.replace("options:\n  auto_refresh: {auto_refresh}\n", "")
+        path = _write_yaml(tmp_path, no_options)
+        case = _make_case(tmp_path)
+        case.auto_refresh = True
+        _run(case, path)  # must not raise
+
+    def test_refresh_is_scoped_to_the_asserted_record(self, tmp_path: Path) -> None:
+        """Regression: auto-refresh must NOT sweep the whole env cache.
+
+        A bare `invalidate_cache()` empties the cache for every record in the
+        environment, forcing unrelated records to be re-read from the database.
+        A re-read runs record rules the cached value never had to pass, so in
+        real Odoo this turned passing asserts into AccessError whenever an
+        earlier step had run `as_user`. Caught against ssi_school: 15 tests
+        that pass on 0.1.0 errored on 0.4.0.
+        """
         path = _write_yaml(
-            tmp_path, self._YAML.replace("options:\n  auto_refresh: {auto_refresh}\n", "")
+            tmp_path,
+            """
+options:
+  auto_refresh: true
+scenarios:
+  - name: "scoped refresh"
+    steps:
+      - step: "make a neighbour record"
+        action: "create"
+        model: "res.partner"
+        save_as: "neighbour"
+        values:
+          name: "Neighbour"
+      - step: "make the subject"
+        action: "create"
+        model: "sale.order"
+        save_as: "so"
+        values:
+          state: "draft"
+      - step: "confirm (leaves a stale cache)"
+        action: "call"
+        target: "so"
+        method: "action_confirm_stale"
+      - step: "assert the subject"
+        action: "assert"
+        target: "so"
+        asserts:
+          state:
+            type: "value"
+            expected: "confirm"
+""",
         )
         case = _make_case(tmp_path)
-        case.auto_refresh = False
-        with mock.patch.object(case, "_resolve_yaml_path", return_value=path):
-            with pytest.raises(YamlAssertionError):
-                case.run_yaml_scenario(str(path))
+        _run(case, path)
+        # The subject was refreshed (the assert passed), but no env-wide sweep
+        # happened — the neighbour's cache was never touched.
+        assert case.env.cache_sweeps == 0
 
     def test_legacy_invalidate_cache_step_still_works(self, tmp_path: Path) -> None:
         """The 533 existing manual steps must remain harmless."""

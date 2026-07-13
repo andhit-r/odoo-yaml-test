@@ -156,10 +156,21 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
     #: Per-scenario record registry. Reset at the start of each scenario.
     registry: Dict[str, Any]
 
-    #: Class-level escape hatch for the automatic pre-assert cache refresh.
-    #: Set to ``False`` on a subclass to restore pre-0.3 behaviour for every
-    #: scenario it runs. Per-file and per-step overrides take precedence.
-    auto_refresh = True
+    #: Opt-in: flush + invalidate a record's cache before asserting on it.
+    #:
+    #: Default ``False``, and deliberately so. Invalidating forces the field to
+    #: be re-read from the database, and a re-read runs the record rules that a
+    #: cached value never had to pass. Turning this on therefore surfaces latent
+    #: security-rule bugs — asserts that only ever passed because nobody re-read
+    #: the value. Measured against ssi_school: 15 of 79 tests turn into
+    #: AccessError, because the scenarios act `as_user: base.user_admin` on
+    #: records that user cannot actually read.
+    #:
+    #: Those tests are wrong and should be fixed — but that is a decision each
+    #: module owner makes on their own schedule, not something a library upgrade
+    #: should force. Enable per file with ``options: {auto_refresh: true}``, per
+    #: scenario, per step (``refresh: true``), or here on a subclass.
+    auto_refresh = False
 
     #: Seam for injecting a Form implementation in tests. When ``None`` the
     #: ``form`` action imports ``odoo.tests.common.Form`` lazily.
@@ -654,17 +665,34 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
 
     @staticmethod
     def _refresh(record: Any) -> None:
-        """Flush pending writes and drop the cache before reading *record*.
+        """Flush pending writes and drop *record*'s cache before reading it.
 
         SSI's policy fields (``confirm_ok``, ``approve_ok``, …) are
         non-stored computes that Odoo does not invalidate when ``state``
         changes, so without this an assert right after a state transition
         reads a stale value.
+
+        The invalidation is deliberately **scoped to this record's ids**.
+        Odoo's ``invalidate_cache()`` with no arguments empties the cache for
+        the *whole environment*, which forces unrelated records to be re-read
+        from the database — and a re-read runs record rules that the cached
+        value never had to pass. That turns a passing assert into an
+        AccessError in scenarios where an earlier step ran ``as_user``.
+        Scoping keeps the fix (fresh computes on the record under assertion)
+        without the collateral damage.
         """
-        for method_name in ("flush", "invalidate_cache"):
-            method = getattr(record, method_name, None)
-            if callable(method):
-                method()
+        flush = getattr(record, "flush", None)
+        if callable(flush):
+            flush()
+
+        invalidate = getattr(record, "invalidate_cache", None)
+        if not callable(invalidate):
+            return
+        ids = getattr(record, "ids", None)
+        if ids:
+            invalidate(ids=list(ids))
+        # An empty recordset (e.g. the model used by `search`) has nothing to
+        # invalidate; the flush above is what makes the search see prior writes.
 
     # ------------------------------------------------------------------
     # Assertions

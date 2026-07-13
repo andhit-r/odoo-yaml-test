@@ -65,18 +65,28 @@ assertion type changed meaning — YAML written against 0.1.0 keeps working.
   reset registry — shared fixtures without shared state. Opt out per scenario
   with `skip_setup: true`.
 
-### Changed
-- **Asserts now read post-flush, post-invalidation values by default.** Before
-  an assertion (and before `search`), the record is flushed and its cache
-  dropped. SSI's policy fields (`confirm_ok`, `approve_ok`, …) are non-stored
-  computes that Odoo does not invalidate when `state` changes, which is why
-  scenarios were littered with manual `invalidate_cache` steps; those steps
-  remain valid but are now redundant.
+- **Opt-in cache refresh** (`auto_refresh`, default **off**). When enabled, the
+  record is flushed and its cache invalidated before an assertion, so
+  non-stored computes — SSI's `confirm_ok`, `approve_ok`, … — are recomputed
+  rather than read stale. This is what the 533 manual `invalidate_cache` steps
+  across the SSI corpus are working around.
 
-  **If a scenario starts failing after this upgrade, the assertion was
-  previously passing against a stale cache.** Opt out, in order of precedence:
-  `refresh: false` on a step, `options: {auto_refresh: false}` on a scenario or
-  file, or `auto_refresh = False` on the test class.
+  Enable per file with `options: {auto_refresh: true}`, per scenario, per step
+  (`refresh: true`), or with `auto_refresh = True` on the test class.
+
+  **It is off by default on purpose.** Invalidating forces the field to be
+  re-read from the database, and a re-read runs the record rules that a cached
+  value never had to pass. So switching it on surfaces asserts that only ever
+  passed because nobody re-read the value. Measured against real Odoo:
+  `ssi_school` goes from 0 to **15 errors out of 79 tests**, all `AccessError`,
+  because its scenarios act `as_user: base.user_admin` on records that user
+  cannot actually read. Those tests are wrong and worth fixing — but that is
+  each module owner's call to make on their own schedule, not something a
+  library upgrade should force. Nothing changes until you opt in.
+
+  The invalidation is scoped to the asserted record's ids. Odoo's bare
+  `invalidate_cache()` empties the cache for the whole environment, which drags
+  unrelated records into the same re-read (and the same access checks).
 
 ## [0.1.0] - 2026-05-01
 
