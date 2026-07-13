@@ -1,8 +1,8 @@
 # odoo-yaml-test
 
-[![PyPI version](https://img.shields.io/pypi/v/odoo-yaml-test.svg)](https://pypi.org/project/odoo-yaml-test/)
-[![Python versions](https://img.shields.io/pypi/pyversions/odoo-yaml-test.svg)](https://pypi.org/project/odoo-yaml-test/)
-[![License](https://img.shields.io/pypi/l/odoo-yaml-test.svg)](https://github.com/andhitia/odoo-yaml-test/blob/main/LICENSE)
+[![CI](https://github.com/andhit-r/odoo-yaml-test/actions/workflows/ci.yml/badge.svg)](https://github.com/andhit-r/odoo-yaml-test/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/andhit-r/odoo-yaml-test)](https://github.com/andhit-r/odoo-yaml-test/releases)
+[![License](https://img.shields.io/github/license/andhit-r/odoo-yaml-test)](https://github.com/andhit-r/odoo-yaml-test/blob/master/LICENSE)
 
 Data-driven unit testing framework for Odoo, powered by YAML scenarios.
 
@@ -25,9 +25,18 @@ instead of repetitive Python boilerplate. It is built specifically to
 
 ## Installation
 
+The package is not on PyPI; it is installed straight from GitHub.
+
 ```bash
-pip install odoo-yaml-test
+# latest
+pip install "git+https://github.com/andhit-r/odoo-yaml-test.git@master#egg=odoo-yaml-test"
+
+# pinned to a release
+pip install "git+https://github.com/andhit-r/odoo-yaml-test.git@v0.4.0#egg=odoo-yaml-test"
 ```
+
+Released versions are listed on the
+[Releases page](https://github.com/andhit-r/odoo-yaml-test/releases).
 
 The package targets Python 3.8+ and is primarily tested against
 Odoo 14, but it depends only on Odoo's public ORM API and should work

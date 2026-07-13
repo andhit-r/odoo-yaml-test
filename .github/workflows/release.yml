@@ -1,0 +1,16 @@
+# release.yml — GitHub Release saja (library, non-service).
+# Memanggil reusable workflow github-release@v1.
+# Semver, isi catatan rilis, dan pembuatan tag = skill git-workflow.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write     # untuk GitHub Release
+
+jobs:
+  github-release:
+    uses: andhit-r/github-release/.github/workflows/release.yml@v1
+    secrets: inherit
