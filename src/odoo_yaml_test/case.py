@@ -681,7 +681,8 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         Scoping keeps the fix (fresh computes on the record under assertion)
         without the collateral damage.
         """
-        flush = getattr(record, "flush", None)
+        return  # SEMENTARA: meniru no-op senyap di Odoo 17+. JANGAN di-merge.
+        flush = getattr(record, "flush", None)  # type: ignore[unreachable]
         if callable(flush):
             flush()
 
