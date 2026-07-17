@@ -74,16 +74,15 @@ jobs:
       PGHOST: postgres
       PGUSER: odoo
       PGPASSWORD: odoo
+      PGDATABASE: probe_test
+      ADDONS_DIR: tests_integration/addons
     steps:
       - uses: actions/checkout@v4
       - name: Install the library under test
         run: pip install -e .
+      - name: Install addons and dependencies
+        run: oca_install_addons
+      - name: Initialize test db (installs base and other deps, no tests)
+        run: oca_init_test_database
       - name: Run the probe against a real Odoo 14 registry
-        run: |
-          odoo \
-            --db_host=postgres --db_user=odoo --db_password=odoo \
-            -d probe_test \
-            --addons-path="${ADDONS_PATH},$(pwd)/tests_integration/addons" \
-            -i yaml_test_probe \
-            --test-enable --stop-after-init \
-            --log-level=test --workers=0
+        run: oca_run_tests
