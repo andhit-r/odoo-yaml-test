@@ -7,7 +7,7 @@ name = "odoo-yaml-test"
 version = "0.4.0"
 description = "Data-driven unit testing framework for Odoo using YAML scenarios."
 readme = "README.md"
-requires-python = ">=3.6"
+requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [
     { name = "Andhitia Rama", email = "andhitia.r@gmail.com" },
@@ -26,14 +26,12 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Framework :: Odoo",
-    "Framework :: Odoo :: 14.0",
+    "Framework :: Odoo :: 19.0",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

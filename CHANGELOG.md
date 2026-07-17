@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **This branch targets Odoo 19.0.** `_refresh()` now calls `env.flush_all()` and
+  `invalidate_recordset()` directly instead of probing for the 14.0 names
+  (`flush`/`invalidate_cache`), which Odoo 17 removed. The probe was never a
+  compatibility shim: because it fell back to doing nothing, `_refresh()` degraded into a
+  silent no-op on 17+, so `refresh: true` stopped clearing stale non-stored computes
+  without any error. There is no fallback here by design — a missing API now raises.
+  `requires-python` is `>=3.10` (Odoo 19's own floor) and the CI `test` matrix follows it.
+- **`action: form` imports `Form` from `odoo.tests`, not `odoo.tests.common`.** The latter
+  still works in 19 through a deprecation shim, but a branch that targets one series calls
+  that series' API directly. No YAML change: this is internal to `_get_form_class()`.
+
+### Migrating scenarios from a 14.0 module
+- **Steps that call `invalidate_cache` break here.** `action: call` with
+  `method: "invalidate_cache"` — the spelling used by the manual cache-drop steps across
+  the SSI corpus — raises `AttributeError` on Odoo 19, because the ORM removed that method
+  in 17. Rename it to `invalidate_recordset`, or better, delete the step and set
+  `refresh: true` on the assert that needed it; handling this is what the library is for.
+  Everything else in the DSL is unchanged — actions, prefixes, assertion types, and
+  operators all behave identically to `master`.
+
 ### Added
 - **An integration tier that runs against a real Odoo 14 registry.** Everything under
   `tests/` drives hand-rolled fakes — and those fakes implement `flush()` /

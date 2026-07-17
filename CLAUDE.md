@@ -79,20 +79,35 @@ rejected every `import` statement and `__import__` reference before we get there
 
 ## Python version constraint
 
-`requires-python = ">=3.6"` and the `setup.cfg` duplicate exist so the package installs under
-old setuptools in OCA's Odoo 14 CI (see the `fix: Python 3.6 compat` and `setup.cfg for
-setuptools <61` commits). Tooling targets 3.8+, but **source must stay import-time compatible
-with old Pythons**: no walrus in module scope, no PEP 604 `X | Y` annotations, use
-`typing.Dict`/`List`/`Optional` in signatures. Local variable annotations like
-`kwargs: dict[str, Any] = {}` are fine (never evaluated).
+`requires-python = ">=3.10"` here (and duplicated in `setup.cfg`, which is not derived from
+it — bump both). 3.10 is Odoo 19's own floor: `odoo/release.py` sets
+`MIN_PY_VERSION = (3, 10)`. The `test` matrix in `ci.yml` must not list interpreters below
+it, or pip refuses to install before any test runs.
+
+`setup.cfg` is kept even though this branch does not need old setuptools — deleting it here
+would fork the file layout away from `master` for no gain.
+
+**Source must nevertheless stay import-time compatible with old Pythons**: no walrus in
+module scope, no PEP 604 `X | Y` annotations, use `typing.Dict`/`List`/`Optional` in
+signatures, and keep `[tool.ruff] target-version = "py38"`. That looks pointless on a 3.10+
+branch and is not: the syntax is what keeps `git cherry-pick` from `master` conflict-free,
+and `target-version` is what stops ruff's `UP` rules from rewriting it all automatically.
+Local variable annotations like `kwargs: dict[str, Any] = {}` are fine (never evaluated).
 
 ## This branch targets one Odoo series
 
-`master` is the **Odoo 14.0** series branch. It is not version-agnostic and must not
-pretend to be: `_refresh()` and `_savepoint()` in `case.py` call the 14.0 ORM API
-directly. Consumers install it with
-`pip install git+https://github.com/andhit-r/odoo-yaml-test.git@master` — never rename
-or repoint this branch. Other series live on their own branches; see `BRANCHING.md`.
+This is the **Odoo 19.0** series branch. It is not version-agnostic and must not pretend
+to be: `_refresh()` in `case.py` calls 19's ORM API (`env.flush_all()`,
+`invalidate_recordset()`) directly, with no `getattr` probe and no fallback — a missing
+API must raise, never degrade into a silent no-op. Consumers install it with
+`pip install git+https://github.com/andhit-r/odoo-yaml-test.git@19.0`.
+
+`master` is the **Odoo 14.0** branch and is never renamed or repointed — production
+consumers pin `@master`. Fixes flow oldest → newest: land a DSL fix on `master` first,
+then `git cherry-pick` it here. That stays cheap only while the source syntax remains
+aligned, so **do not modernise this branch** (no PEP 604, keep `typing.Dict`/`List`/
+`Optional`, keep `[tool.ruff] target-version = "py38"`) even though `requires-python` is
+3.10 here. See `BRANCHING.md` for the full list of what may legitimately differ.
 
 ## Docs are part of the contract
 

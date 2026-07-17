@@ -26,7 +26,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        # Follows requires-python (>=3.10). Odoo 19 needs 3.10+
+        # (odoo/release.py: MIN_PY_VERSION = (3, 10)), so 3.8/3.9 are not
+        # installable on this branch — pip refuses before a test can run.
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -59,11 +62,12 @@ jobs:
 
   integration:
     runs-on: ubuntu-22.04
-    container: ghcr.io/oca/oca-ci/py3.6-odoo14.0:latest
-    name: integration (Odoo 14.0)
+    container: ghcr.io/oca/oca-ci/py3.10-odoo19.0:latest
+    name: integration (Odoo 19.0)
     services:
       postgres:
-        image: postgres:9.6
+        # Odoo 19 requires PostgreSQL >= 13; the 9.6 used on master would fail.
+        image: postgres:15
         env:
           POSTGRES_USER: odoo
           POSTGRES_PASSWORD: odoo

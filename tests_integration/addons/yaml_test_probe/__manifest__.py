@@ -2,7 +2,7 @@
 # License Apache-2.0 (http://www.apache.org/licenses/LICENSE-2.0).
 {
     "name": "odoo-yaml-test integration probe",
-    "version": "14.0.1.0.0",
+    "version": "19.0.1.0.0",
     "category": "Hidden/Tests",
     "website": "https://github.com/andhit-r/odoo-yaml-test",
     "author": "Andhitia Rama",

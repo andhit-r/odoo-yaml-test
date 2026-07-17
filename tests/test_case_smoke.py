@@ -11,9 +11,18 @@ because we are not actually running an Odoo TransactionCase.
 
 The fakes model one behaviour deliberately: ``FakeRecord`` keeps a
 ``_cache`` that goes stale on ``write``, mirroring the real reason SSI
-scenarios are littered with manual ``invalidate_cache`` steps (non-stored
+scenarios are littered with manual cache-invalidation steps (non-stored
 compute fields that Odoo does not invalidate on a state change). That is
 what lets us prove the auto-refresh feature actually fires.
+
+The fakes speak the **Odoo 19.0** cache API — ``env.flush_all()`` and
+``invalidate_recordset()`` — because that is what this branch's ``case.py``
+calls. Keeping them aligned with the branch's target series is the point: a
+fake that answered to the 14.0 names (``flush``/``invalidate_cache``) would
+be describing an ORM that does not exist here, and would keep passing while
+the real thing broke. These fakes can never prove the library works against
+a real Odoo 19 — only the ``integration`` CI job can (see
+``tests_integration/``).
 """
 
 from __future__ import annotations
@@ -52,7 +61,6 @@ class FakeRecord:
         # like a non-stored compute field whose dependency changed.
         self._cache: dict[str, Any] = {}
         self.env = model.env
-        self.flushed = 0
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal attribute lookup fails.
@@ -90,28 +98,30 @@ class FakeRecord:
         clone.env = env
         return clone
 
-    # -- cache plumbing, mirroring Odoo's public API --------------------
+    # -- cache plumbing, mirroring Odoo 19's public API -----------------
 
-    def flush(self) -> None:
-        self.flushed += 1
+    def invalidate_recordset(self, fnames=None, flush=True) -> None:
+        """Mirror ``odoo/orm/models.py::invalidate_recordset`` (19.0).
 
-    def invalidate_cache(self, fnames=None, ids=None) -> None:
-        """Mirror Odoo's signature.
+        Scoped to ``self`` by construction — there is no argument that could
+        widen it to the whole environment. That is the improvement over 14.0's
+        ``invalidate_cache()``, whose no-argument form swept every record in
+        the env, forcing unrelated records to be re-read under a restricted
+        user and blowing up with AccessError against real Odoo.
 
-        With no ``ids`` Odoo empties the cache for the WHOLE environment, not
-        just this record — that over-broad sweep forced unrelated records to be
-        re-read under a restricted user and blew up with AccessError against
-        real Odoo. The fake records that here so a scoped call stays scoped.
+        The env-wide sweep still exists in 19 as ``env.invalidate_all()``; the
+        fake keeps it (and its ``cache_sweeps`` counter) so the tests can still
+        prove we never reach for it.
         """
-        if ids is None:
-            for record in self.env.created:
-                record._cache.clear()
-                record.env.cache_sweeps += 1
-            self.env.cache_sweeps += 1
+        if flush:
+            self.flush_recordset(fnames)
+        self._cache.clear()
+
+    def flush_recordset(self, fnames=None) -> None:
+        """Mirror ``flush_recordset`` (19.0), including its empty-set no-op."""
+        if not self.ids:
             return
-        for record in self.env.created:
-            if record.id in ids:
-                record._cache.clear()
+        self.env.flushed += 1
 
     # -- methods driven by scenarios -----------------------------------
 
@@ -170,6 +180,18 @@ class FakeModel:
             "product_uom_qty": "float",
         }
 
+    @property
+    def ids(self) -> list[int]:
+        """Mirror a real empty recordset: ``env["model"]`` has ``ids == []``.
+
+        ``search`` refreshes through this object, and ``_refresh`` reads
+        ``.ids`` to decide whether there is a cache to drop. The fake used to
+        omit this entirely and got away with it only because the 14.0 code
+        probed via ``getattr(record, "ids", None)`` — so the search-path
+        refresh was never really exercised here. It is now.
+        """
+        return []
+
     def fields_get(self, fields: list[str], attributes: list[str]) -> dict[str, dict[str, Any]]:
         return {f: {"type": self._field_types.get(f, "char")} for f in fields}
 
@@ -208,6 +230,8 @@ class FakeEnv:
         self.created: list[FakeRecord] = []
         # Counts env-wide cache sweeps — the collateral damage we must not cause.
         self.cache_sweeps = 0
+        # Flushing is env-level in 19 (`flush_all`), not per-record as in 14.
+        self.flushed = 0
         self.uid = user
 
         base = FakeModel("res.company", self)
@@ -217,6 +241,32 @@ class FakeEnv:
 
     def __getitem__(self, model_name: str) -> FakeModel:
         return FakeModel(model_name, self)
+
+    # -- cache plumbing, mirroring Odoo 19's Environment ----------------
+
+    def flush_all(self) -> None:
+        """Mirror ``odoo/orm/environments.py::flush_all`` (19.0).
+
+        Env-wide, and unlike ``flush_recordset`` it has no empty-set escape —
+        which is exactly why ``_refresh`` calls this one: ``search`` refreshes
+        through an empty recordset, and ``flush_recordset`` would no-op there.
+        Flushing writes pending values out; it never drops a cached value, so
+        it causes no cache sweep.
+        """
+        self.flushed += 1
+
+    def invalidate_all(self, flush: bool = True) -> None:
+        """Mirror ``Environment.invalidate_all`` (19.0) — the env-wide sweep.
+
+        Present so the tests can prove ``_refresh`` never calls it. Reaching
+        for this is what re-reads unrelated records and turns a passing assert
+        into an AccessError after an ``as_user`` step.
+        """
+        if flush:
+            self.flush_all()
+        for record in self.created:
+            record._cache.clear()
+        self.cache_sweeps += 1
 
     def ref(self, xml_id: str) -> FakeRecord:
         if xml_id not in self._refs:
@@ -1113,12 +1163,17 @@ scenarios:
     def test_refresh_is_scoped_to_the_asserted_record(self, tmp_path: Path) -> None:
         """Regression: auto-refresh must NOT sweep the whole env cache.
 
-        A bare `invalidate_cache()` empties the cache for every record in the
+        `env.invalidate_all()` empties the cache for every record in the
         environment, forcing unrelated records to be re-read from the database.
         A re-read runs record rules the cached value never had to pass, so in
         real Odoo this turned passing asserts into AccessError whenever an
         earlier step had run `as_user`. Caught against ssi_school: 15 tests
         that pass on 0.1.0 errored on 0.4.0.
+
+        On 19.0 `invalidate_recordset()` is scoped by construction, so this is
+        no longer something `_refresh` has to get right — but the assertion
+        stays: it now guards against anyone reaching for `env.invalidate_all()`
+        as a convenient big hammer.
         """
         path = _write_yaml(
             tmp_path,
@@ -1159,13 +1214,52 @@ scenarios:
         # happened — the neighbour's cache was never touched.
         assert case.env.cache_sweeps == 0
 
-    def test_legacy_invalidate_cache_step_still_works(self, tmp_path: Path) -> None:
-        """The 533 existing manual steps must remain harmless."""
+    def test_refresh_on_search_flushes_through_an_empty_recordset(self, tmp_path: Path) -> None:
+        """`search` refreshes through `env[model]`, which holds no ids.
+
+        This path had no coverage at all before 19.0: `_action_search` was
+        never executed by any test, and the 14.0 `_refresh` probed for `.ids`
+        with a `getattr` default, so a fake lacking `ids` still sailed through.
+        It matters here because 19's `flush_recordset()` opens with
+        `if not self: return` — refreshing a search through it would flush
+        nothing and silently stop the search seeing prior writes. `_refresh`
+        therefore goes through `env.flush_all()`, and this proves the flush
+        really happens while no cache is dropped (there is none to drop).
+        """
         path = _write_yaml(
             tmp_path,
             """
 scenarios:
-  - name: "legacy"
+  - name: "search refreshes"
+    steps:
+      - step: "find orders"
+        action: "search"
+        model: "sale.order"
+        domain: []
+        save_as: "found"
+        refresh: true
+""",
+        )
+        case = _make_case(tmp_path)
+        _run(case, path)  # must not raise: env[model] has ids == []
+        assert case.env.flushed == 1
+        assert case.env.cache_sweeps == 0
+
+    def test_manual_invalidate_recordset_step_works(self, tmp_path: Path) -> None:
+        """A manual cache-drop step keeps working — in this series' spelling.
+
+        On 14.0 this test drove `method: "invalidate_cache"`, the spelling the
+        533 manual steps across the SSI corpus use. Odoo 17 removed that method,
+        so on 19 such a step raises AttributeError rather than being harmless:
+        scenarios carried over from a 14.0 module must rename it to
+        `invalidate_recordset` — or better, drop the manual step and use
+        `refresh: true`, which is what this library exists to do for them.
+        """
+        path = _write_yaml(
+            tmp_path,
+            """
+scenarios:
+  - name: "manual cache drop"
     steps:
       - step: "make order"
         action: "create"
@@ -1180,7 +1274,7 @@ scenarios:
       - step: "Invalidate cache after confirm"
         action: "call"
         target: "so"
-        method: "invalidate_cache"
+        method: "invalidate_recordset"
       - step: "assert"
         action: "assert"
         target: "so"

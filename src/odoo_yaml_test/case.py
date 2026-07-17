@@ -574,10 +574,13 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
             return self.form_class
         try:
             # Lazy on purpose: Odoo stays an optional import (see module docstring).
-            from odoo.tests.common import Form
+            # ``odoo.tests`` — not ``odoo.tests.common``: since 18.0 the latter only
+            # serves Form through a deprecation shim, and a branch that targets one
+            # series calls that series' API directly rather than leaning on a shim.
+            from odoo.tests import Form
         except ImportError as exc:  # pragma: no cover - only without Odoo
             raise YamlConfigurationError(
-                "action 'form' requires Odoo to be importable (odoo.tests.common.Form)"
+                "action 'form' requires Odoo to be importable (odoo.tests.Form)"
             ) from exc
         return Form
 
@@ -672,27 +675,32 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         changes, so without this an assert right after a state transition
         reads a stale value.
 
-        The invalidation is deliberately **scoped to this record's ids**.
-        Odoo's ``invalidate_cache()`` with no arguments empties the cache for
-        the *whole environment*, which forces unrelated records to be re-read
-        from the database — and a re-read runs record rules that the cached
-        value never had to pass. That turns a passing assert into an
-        AccessError in scenarios where an earlier step ran ``as_user``.
-        Scoping keeps the fix (fresh computes on the record under assertion)
-        without the collateral damage.
-        """
-        flush = getattr(record, "flush", None)
-        if callable(flush):
-            flush()
+        Invalidation is **scoped to this recordset**. Dropping the whole
+        environment's cache would force unrelated records to be re-read, and a
+        re-read runs record rules the cached value never had to pass — turning
+        a passing assert into an AccessError after an earlier ``as_user`` step.
+        ``invalidate_recordset()`` is scoped by construction, so the scoping is
+        no longer something this method has to arrange.
 
-        invalidate = getattr(record, "invalidate_cache", None)
-        if not callable(invalidate):
-            return
-        ids = getattr(record, "ids", None)
-        if ids:
-            invalidate(ids=list(ids))
-        # An empty recordset (e.g. the model used by `search`) has nothing to
-        # invalidate; the flush above is what makes the search see prior writes.
+        This branch targets Odoo 19.0 and calls its ORM API directly. The 14.0
+        names (``flush``/``invalidate_cache``) were removed in 17.0; probing for
+        them with ``getattr`` and silently doing nothing is what turned this
+        method into a no-op on newer series. If the API is ever missing, let the
+        AttributeError surface — a loud failure beats a silent one.
+
+        ``env.flush_all()`` is used rather than ``flush_recordset()`` on
+        purpose. ``search`` calls this with an *empty* recordset (the model
+        itself), and ``flush_recordset()`` opens with ``if not self: return`` —
+        it would flush nothing, so a search would silently stop seeing prior
+        writes. ``flush_all()`` covers both callers; flushing more than needed
+        only writes pending changes out, it never drops a cached value.
+        """
+        record.env.flush_all()
+        if record.ids:
+            # An empty recordset (the model used by `search`) has no cache of
+            # its own to drop; the flush above is what makes the search see
+            # prior writes.
+            record.invalidate_recordset()
 
     # ------------------------------------------------------------------
     # Assertions
