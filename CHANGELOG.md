@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Documentation now states the target Odoo series honestly.** The README claimed the
+  library "should work on later versions as well" because it only touches Odoo's public
+  ORM API. That claim was false: `flush()` and `invalidate_cache()` — both public API in
+  14.0 — were removed in Odoo 17, which silently turns `_refresh()` into a no-op there.
+  Nothing changed in the code; the claim was the bug. `master` is now documented as the
+  14.0 series branch.
+- **`CLAUDE.md` no longer describes a PyPI release flow that does not exist.** Releases
+  have created a GitHub Release via `release.yml` since `04baa38`; the guidance still
+  pointed at a `publish.yml` with PyPI OIDC publishing.
+
 ### Fixed
 - **`asserts` inside `action: form` no longer crash on any field.** `_read_path`
   detected "empty container" via `hasattr(current, "__len__")`. A real Odoo

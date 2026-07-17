@@ -38,9 +38,11 @@ pip install "git+https://github.com/andhit-r/odoo-yaml-test.git@v0.4.0#egg=odoo-
 Released versions are listed on the
 [Releases page](https://github.com/andhit-r/odoo-yaml-test/releases).
 
-The package targets Python 3.8+ and is primarily tested against
-Odoo 14, but it depends only on Odoo's public ORM API and should work
-on later versions as well.
+The package targets Python 3.8+. This library targets **Odoo 14.0** and is tested
+only against it. Later series are maintained on their own branches — see
+`BRANCHING.md`. The public ORM API this library uses is *not* stable across series:
+`flush()` and `invalidate_cache()` were removed in Odoo 17, so the 14.0 code will not
+behave correctly on newer series.
 
 ## Quickstart
 
