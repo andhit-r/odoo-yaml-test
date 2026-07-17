@@ -22,9 +22,10 @@ mypy src                     # types only
 python -m build              # sdist + wheel
 ```
 
-Releases publish to PyPI via OIDC trusted publishing on a pushed `v*.*.*` tag
-(`.github/workflows/publish.yml`). Bump the version in **three** places, they are not
-derived from each other: `pyproject.toml`, `setup.cfg`, and `__init__.__version__`.
+Releases create a **GitHub Release** (not PyPI) on a pushed `v*` tag, via the reusable
+workflow `andhit-r/github-release@v1` (`.github/workflows/release.yml`). Bump the
+version in **three** places, they are not derived from each other: `pyproject.toml`,
+`setup.cfg`, and `__init__.__version__`.
 
 ## Architecture
 
@@ -84,6 +85,14 @@ setuptools <61` commits). Tooling targets 3.8+, but **source must stay import-ti
 with old Pythons**: no walrus in module scope, no PEP 604 `X | Y` annotations, use
 `typing.Dict`/`List`/`Optional` in signatures. Local variable annotations like
 `kwargs: dict[str, Any] = {}` are fine (never evaluated).
+
+## This branch targets one Odoo series
+
+`master` is the **Odoo 14.0** series branch. It is not version-agnostic and must not
+pretend to be: `_refresh()` and `_savepoint()` in `case.py` call the 14.0 ORM API
+directly. Consumers install it with
+`pip install git+https://github.com/andhit-r/odoo-yaml-test.git@master` — never rename
+or repoint this branch. Other series live on their own branches; see `BRANCHING.md`.
 
 ## Docs are part of the contract
 
