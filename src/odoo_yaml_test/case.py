@@ -744,6 +744,28 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         return resolved
 
     @staticmethod
+    def _is_empty_container(value: Any) -> bool:
+        """Return whether *value* is a zero-length container/recordset.
+
+        Deliberately calls ``len()`` directly and catches both ``TypeError``
+        (the ordinary "no ``__len__``" case) and ``AssertionError``, rather
+        than probing with ``hasattr(value, "__len__")``. Odoo's test ``Form``
+        defines a custom ``__getattr__`` that raises ``AssertionError`` (not
+        ``AttributeError``) for any name absent from the view — including
+        dunder probes like ``__len__``. ``hasattr()`` only swallows
+        ``AttributeError``, so probing a Form (or the library's
+        ``_FormProxy`` wrapper around one, used by ``asserts`` inside
+        ``action: form``) with ``hasattr`` crashes instead of reporting
+        "not a container".
+        """
+        try:
+            return len(value) == 0
+        except TypeError:
+            return False
+        except AssertionError:
+            return False
+
+    @staticmethod
     def _read_path(record: Any, path: str) -> Any:
         """Read a possibly dotted *path* off *record*.
 
@@ -752,7 +774,7 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         current = record
         walked: List[str] = []
         for segment in path.split("."):
-            if current is None or (hasattr(current, "__len__") and len(current) == 0):
+            if current is None or YamlTransactionCase._is_empty_container(current):
                 joined = ".".join(walked) or "<record>"
                 raise YamlAssertionError(f"cannot read {segment!r}: {joined} is empty")
             try:

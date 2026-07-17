@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, ClassVar, Iterator
 from unittest import mock
 
 import pytest
@@ -294,6 +294,46 @@ class FakeForm:
         if name in data:
             return data[name]
         raise AttributeError(name)
+
+    def save(self) -> FakeRecord:
+        subject = object.__getattribute__(self, "_subject")
+        data = object.__getattribute__(self, "_data")
+        model = subject if isinstance(subject, FakeModel) else subject._model
+        return model.create(dict(data))
+
+
+class FakeFormStrict:
+    """Odoo-faithful stand-in for ``Form``: raises ``AssertionError`` — not
+    ``AttributeError`` — for any attribute absent from the (fake) view.
+
+    ``odoo.tests.common.Form.__getattr__`` does exactly this
+    (``assert descr is not None, "%s was not found in the view" % field``).
+    Regression guard for the bug where ``_read_path`` probed
+    ``hasattr(current, "__len__")``: for a real Form, that probe raises
+    ``AssertionError``, which ``hasattr()`` does not catch (it only swallows
+    ``AttributeError``), so it used to blow up any ``asserts`` inside
+    ``action: form``. ``FakeForm`` above raises the "normal" ``AttributeError``
+    and never exposed this.
+    """
+
+    _view_fields: ClassVar[set[str]] = {"name", "partner_id", "type_id"}
+
+    def __init__(self, subject: Any) -> None:
+        object.__setattr__(self, "_subject", subject)
+        object.__setattr__(self, "_data", {"type_id": "preset"})
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        assert name in self._view_fields, f"{name} was not found in the view"
+        data = object.__getattribute__(self, "_data")
+        data[name] = value
+        if name == "partner_id":
+            data["type_id"] = False  # the "onchange"
+
+    def __getattr__(self, name: str) -> Any:
+        assert name in object.__getattribute__(
+            self, "_view_fields"
+        ), f"{name} was not found in the view"
+        return object.__getattribute__(self, "_data").get(name)
 
     def save(self) -> FakeRecord:
         subject = object.__getattribute__(self, "_subject")
@@ -1506,6 +1546,42 @@ scenarios:
         case.form_class = FakeForm
         _run(case, path)
         assert case.registry["so"]._values["partner_id"] is case.registry["p"]
+
+    def test_asserts_survive_form_getattr_raising_assertionerror(self, tmp_path: Path) -> None:
+        """Regression: a real Odoo Form raises AssertionError (not
+        AttributeError) for any name missing from the view, including dunder
+        probes like __len__. _read_path must not detect an "empty container"
+        via hasattr(current, "__len__"), because hasattr() only swallows
+        AttributeError and would let this AssertionError escape uncaught,
+        breaking asserts inside every action: form step regardless of which
+        field is being asserted.
+        """
+        path = _write_yaml(
+            tmp_path,
+            """
+scenarios:
+  - name: "onchange, Form raises AssertionError for unknown names"
+    steps:
+      - step: "make partner"
+        action: "create"
+        model: "res.partner"
+        save_as: "p"
+        values: {name: "Acme"}
+      - step: "form clears type on partner change"
+        action: "form"
+        model: "sale.order"
+        save: false
+        values:
+          partner_id: "REC: p"
+        asserts:
+          type_id:
+            type: "value"
+            operator: "is_falsy"
+""",
+        )
+        case = _make_case(tmp_path)
+        case.form_class = FakeFormStrict
+        _run(case, path)
 
     def test_model_and_target_are_mutually_exclusive(self, tmp_path: Path) -> None:
         path = _write_yaml(

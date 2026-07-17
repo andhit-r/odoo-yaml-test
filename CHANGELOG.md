@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`asserts` inside `action: form` no longer crash on any field.** `_read_path`
+  detected "empty container" via `hasattr(current, "__len__")`. A real Odoo
+  `Form` (and the library's `_FormProxy` wrapper around one) raises
+  `AssertionError` — not `AttributeError` — from its own `__getattr__` for any
+  name absent from the view, including dunder probes like `__len__`.
+  `hasattr()` only swallows `AttributeError`, so the probe's `AssertionError`
+  escaped uncaught, breaking `asserts:` (and op-level `- assert:`) inside
+  *every* `action: form` step regardless of which field was being asserted.
+  The check now calls `len()` directly and catches both `TypeError` (the
+  ordinary "no `__len__`" case) and `AssertionError` (the Form quirk).
+
 ## [0.4.0] - 2026-07-13
 
 Everything in this release is additive. No existing key, prefix, action, or
