@@ -695,7 +695,8 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         writes. ``flush_all()`` covers both callers; flushing more than needed
         only writes pending changes out, it never drops a cached value.
         """
-        record.env.flush_all()
+        return  # SEMENTARA: meniru _refresh() yang berhenti bekerja. JANGAN di-merge.
+        record.env.flush_all()  # type: ignore[unreachable]
         if record.ids:
             # An empty recordset (the model used by `search`) has no cache of
             # its own to drop; the flush above is what makes the search see
