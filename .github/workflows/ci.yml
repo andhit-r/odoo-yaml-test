@@ -84,5 +84,7 @@ jobs:
         run: oca_install_addons
       - name: Initialize test db (installs base and other deps, no tests)
         run: oca_init_test_database
+      - name: Upgrade coverage so it can read this repo's pyproject.toml
+        run: pip install -U "coverage[toml]"
       - name: Run the probe against a real Odoo 14 registry
         run: oca_run_tests
