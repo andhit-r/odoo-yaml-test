@@ -6,7 +6,7 @@ series' ORM API directly and is tested only against it.
 | Branch | Odoo series | Status | Consumers install with |
 |---|---|---|---|
 | `master` | 14.0 | active | `git+https://github.com/andhit-r/odoo-yaml-test.git@master` |
-| `19.0` | 19.0 | not created yet (see BL-0004) | `git+https://github.com/andhit-r/odoo-yaml-test.git@19.0` |
+| `19.0` | 19.0 | active | `git+https://github.com/andhit-r/odoo-yaml-test.git@19.0` |
 
 ## `master` is the 14.0 branch and is never renamed
 
