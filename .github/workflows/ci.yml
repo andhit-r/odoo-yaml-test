@@ -56,3 +56,35 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  integration:
+    runs-on: ubuntu-22.04
+    container: ghcr.io/oca/oca-ci/py3.6-odoo14.0:latest
+    name: integration (Odoo 14.0)
+    services:
+      postgres:
+        image: postgres:9.6
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: odoo
+        ports:
+          - 5432:5432
+    env:
+      PGHOST: postgres
+      PGUSER: odoo
+      PGPASSWORD: odoo
+      PGDATABASE: probe_test
+      ADDONS_DIR: tests_integration/addons
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the library under test
+        run: pip install -e .
+      - name: Install addons and dependencies
+        run: oca_install_addons
+      - name: Initialize test db (installs base and other deps, no tests)
+        run: oca_init_test_database
+      - name: Upgrade coverage so it can read this repo's pyproject.toml
+        run: pip install -U "coverage[toml]"
+      - name: Run the probe against a real Odoo 14 registry
+        run: oca_run_tests

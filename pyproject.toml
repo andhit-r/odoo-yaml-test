@@ -75,6 +75,7 @@ odoo_yaml_test = ["py.typed"]
 line-length = 100
 target-version = "py38"
 src = ["src", "tests"]
+exclude = ["tests_integration/"]
 
 [tool.ruff.lint]
 select = [

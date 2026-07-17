@@ -1,0 +1,2 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_yaml_test_probe,yaml.test.probe all,model_yaml_test_probe,,1,1,1,1
