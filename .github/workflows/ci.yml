@@ -83,7 +83,7 @@ jobs:
           odoo \
             --db_host=postgres --db_user=odoo --db_password=odoo \
             -d probe_test \
-            --addons-path="$(pwd)/tests_integration/addons" \
+            --addons-path="${ADDONS_PATH},$(pwd)/tests_integration/addons" \
             -i yaml_test_probe \
             --test-enable --stop-after-init \
             --log-level=test --workers=0
