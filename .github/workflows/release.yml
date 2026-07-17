@@ -5,7 +5,7 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v*', '1*.0-v*']
 
 permissions:
   contents: write     # untuk GitHub Release

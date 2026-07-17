@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`CLAUDE.md` no longer describes a PyPI release flow that does not exist.** Releases
   have created a GitHub Release via `release.yml` since `04baa38`; the guidance still
   pointed at a `publish.yml` with PyPI OIDC publishing.
+- **CI and release triggers now accept series branches.** `ci.yml` fired only on
+  `master`, so a series branch cut from it would have inherited a filter that never
+  matches — silently no CI. `release.yml` now also accepts `<series>-v*` tags, so series
+  releases do not collide with `master`'s existing `vX.Y.Z` namespace. Both changes are
+  additive: `master` pushes and `v*` tags behave exactly as before. Policy is documented
+  in the new `BRANCHING.md`.
 
 ### Fixed
 - **`asserts` inside `action: form` no longer crash on any field.** `_read_path`
