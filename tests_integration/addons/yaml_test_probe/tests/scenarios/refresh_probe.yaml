@@ -1,0 +1,35 @@
+scenarios:
+  - name: "refresh clears a stale non-stored compute"
+    steps:
+      - step: "Create probe with source=1"
+        action: "create"
+        model: "yaml.test.probe"
+        save_as: "probe"
+        values:
+          name: "probe"
+          source: 1
+
+      - step: "Read mirror once so Odoo caches it"
+        action: "assert"
+        target: "probe"
+        asserts:
+          mirror:
+            type: "value"
+            operator: "equals"
+            expected: 2
+
+      - step: "Write source=5; Odoo has no trigger to invalidate mirror"
+        action: "write"
+        target: "probe"
+        values:
+          source: 5
+
+      - step: "With refresh, mirror must be recomputed to 10"
+        action: "assert"
+        target: "probe"
+        refresh: true
+        asserts:
+          mirror:
+            type: "value"
+            operator: "equals"
+            expected: 10

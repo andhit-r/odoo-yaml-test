@@ -56,3 +56,34 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  integration:
+    runs-on: ubuntu-22.04
+    container: ghcr.io/oca/oca-ci/py3.6-odoo14.0:latest
+    name: integration (Odoo 14.0)
+    services:
+      postgres:
+        image: postgres:9.6
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: odoo
+        ports:
+          - 5432:5432
+    env:
+      PGHOST: postgres
+      PGUSER: odoo
+      PGPASSWORD: odoo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the library under test
+        run: pip install -e .
+      - name: Run the probe against a real Odoo 14 registry
+        run: |
+          odoo \
+            --db_host=postgres --db_user=odoo --db_password=odoo \
+            -d probe_test \
+            --addons-path="$(pwd)/tests_integration/addons" \
+            -i yaml_test_probe \
+            --test-enable --stop-after-init \
+            --log-level=test --workers=0

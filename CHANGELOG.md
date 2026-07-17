@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **An integration tier that runs against a real Odoo 14 registry.** Everything under
+  `tests/` drives hand-rolled fakes — and those fakes implement `flush()` /
+  `invalidate_cache()`, the very API `case.py` assumes, so fake and code always agreed
+  and the suite could never notice the ORM drifting out from under it. The new
+  `tests_integration/` tier installs a throwaway `yaml_test_probe` addon whose
+  non-stored compute Odoo never invalidates, which makes `_refresh()` observable: if it
+  silently stops working, the assert reads a stale value and CI goes red. Excluded from
+  the default `pytest` run; executes only in the `integration` CI job. Odoo remains an
+  optional import and is still absent from `dependencies`.
+
 ### Changed
 - **Documentation now states the target Odoo series honestly.** The README claimed the
   library "should work on later versions as well" because it only touches Odoo's public
