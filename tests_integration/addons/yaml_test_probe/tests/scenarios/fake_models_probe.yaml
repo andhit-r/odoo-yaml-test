@@ -1,0 +1,83 @@
+fake_models:
+  classes:
+    - "odoo.addons.yaml_test_probe.tests.fake_models:YamlTestFakeMixin"
+    - "odoo.addons.yaml_test_probe.tests.fake_models:YamlTestFakeConsumer"
+
+# NOTE: no `setup:` block here on purpose. Setup steps are replayed before
+# *every* scenario, and scenarios share one transaction — so creating a user
+# with a fixed login in setup succeeds for the first scenario and dies on
+# res_users_login_key for the second. The user below is created inside the one
+# scenario that needs it.
+
+scenarios:
+  - name: "a mixin's compute and action work through a model that exists only here"
+    steps:
+      - step: "Create through the fake concrete model"
+        action: "create"
+        model: "yaml.test.fake.consumer"
+        save_as: "rec"
+        values:
+          name: "probe"
+
+      - step: "The mixin's compute is live"
+        action: "assert"
+        target: "rec"
+        asserts:
+          state:
+            type: "value"
+            operator: "equals"
+            expected: "draft"
+          done_ok:
+            type: "value"
+            operator: "equals"
+            expected: false
+
+      - step: "The mixin's action method transitions state"
+        action: "call"
+        target: "rec"
+        method: "action_done"
+
+      - step: "The compute follows the transition"
+        action: "assert"
+        target: "rec"
+        refresh: true
+        asserts:
+          state:
+            type: "value"
+            operator: "equals"
+            expected: "done"
+          done_ok:
+            type: "value"
+            operator: "equals"
+            expected: true
+
+  - name: "the automatically created ACL lets a plain user use the fake model"
+    steps:
+      - step: "A plain internal user"
+        action: "create"
+        model: "res.users"
+        save_as: "plain_user"
+        values:
+          name: "Fake Model Probe User"
+          login: "yaml_test_fake_probe_user"
+          # Odoo 19 renamed res.users.groups_id -> group_ids.
+          group_ids: "EVAL: [(6, 0, [env.ref('base.group_user').id])]"
+
+      - step: "Create as a non-superuser — fails with AccessError without the auto ACL"
+        action: "create"
+        model: "yaml.test.fake.consumer"
+        save_as: "rec"
+        as_user: "plain_user"
+        values:
+          name: "acl probe"
+
+      - step: "Read it back as that same user"
+        action: "assert"
+        target: "rec"
+        as_user: "plain_user"
+        refresh: true
+        asserts:
+          state:
+            type: "value"
+            operator: "equals"
+            expected: "draft"

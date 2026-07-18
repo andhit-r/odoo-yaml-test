@@ -9,6 +9,7 @@ import pytest
 from odoo_yaml_test.case import YamlTransactionCase
 from odoo_yaml_test.exceptions import YamlConfigurationError
 from odoo_yaml_test.loader import (
+    extract_fake_models,
     extract_options,
     extract_setup_steps,
     load_yaml_file,
@@ -76,6 +77,93 @@ class TestValidateScenarios:
             validate_scenarios_document({"scenarios": [{"name": "s1"}]}, "test.yaml")
 
 
+class TestExtractFakeModels:
+    SHORT = "odoo.addons.mod.tests.fake_models:Thing"
+
+    def test_absent_returns_empty(self) -> None:
+        assert extract_fake_models({}, "test.yaml") == {}
+
+    def test_short_form_normalises_to_long_form(self) -> None:
+        result = extract_fake_models({"fake_models": [self.SHORT]}, "test.yaml")
+        assert result == {
+            "classes": [self.SHORT],
+            "acl": True,
+            "groups": ["base.group_user"],
+            "addon": None,
+        }
+
+    def test_long_form_keeps_explicit_values(self) -> None:
+        result = extract_fake_models(
+            {
+                "fake_models": {
+                    "classes": [self.SHORT],
+                    "acl": False,
+                    "groups": ["base.group_system"],
+                    "addon": "mod",
+                }
+            },
+            "test.yaml",
+        )
+        assert result["acl"] is False
+        assert result["groups"] == ["base.group_system"]
+        assert result["addon"] == "mod"
+
+    def test_returned_lists_are_copies(self) -> None:
+        """Mutating the result must not write back into the parsed document."""
+        classes = [self.SHORT]
+        data = {"fake_models": {"classes": classes}}
+        result = extract_fake_models(data, "test.yaml")
+        result["classes"].append("other")
+        assert classes == [self.SHORT]
+
+    def test_scalar_raises(self) -> None:
+        with pytest.raises(YamlConfigurationError, match="must be a list of class references"):
+            extract_fake_models({"fake_models": "nope"}, "test.yaml")
+
+    def test_unknown_key_raises(self) -> None:
+        with pytest.raises(YamlConfigurationError, match="Unknown key"):
+            extract_fake_models(
+                {"fake_models": {"classes": [self.SHORT], "acls": False}}, "test.yaml"
+            )
+
+    @pytest.mark.parametrize("classes", [None, [], "str", {}])
+    def test_bad_classes_raises(self, classes) -> None:
+        with pytest.raises(YamlConfigurationError, match="must be a non-empty list"):
+            extract_fake_models({"fake_models": {"classes": classes}}, "test.yaml")
+
+    def test_non_string_entry_raises(self) -> None:
+        with pytest.raises(YamlConfigurationError, match=r"classes\[0\].*must be a string"):
+            extract_fake_models({"fake_models": [123]}, "test.yaml")
+
+    @pytest.mark.parametrize("ref", ["no_colon", ":Thing", "module:", "  :  "])
+    def test_malformed_reference_raises(self, ref: str) -> None:
+        with pytest.raises(YamlConfigurationError, match=r"module\.path:ClassName"):
+            extract_fake_models({"fake_models": [ref]}, "test.yaml")
+
+    def test_non_bool_acl_raises(self) -> None:
+        with pytest.raises(YamlConfigurationError, match=r"'fake_models\.acl'.*must be a boolean"):
+            extract_fake_models(
+                {"fake_models": {"classes": [self.SHORT], "acl": "yes"}}, "test.yaml"
+            )
+
+    @pytest.mark.parametrize("groups", ["base.group_user", [], {}])
+    def test_bad_groups_raises(self, groups) -> None:
+        with pytest.raises(YamlConfigurationError, match="must be a non-empty list of xml_id"):
+            extract_fake_models(
+                {"fake_models": {"classes": [self.SHORT], "groups": groups}}, "test.yaml"
+            )
+
+    def test_non_string_group_raises(self) -> None:
+        with pytest.raises(YamlConfigurationError, match=r"groups\[0\].*must be a string"):
+            extract_fake_models(
+                {"fake_models": {"classes": [self.SHORT], "groups": [7]}}, "test.yaml"
+            )
+
+    def test_non_string_addon_raises(self) -> None:
+        with pytest.raises(YamlConfigurationError, match=r"'fake_models\.addon'.*must be a string"):
+            extract_fake_models({"fake_models": {"classes": [self.SHORT], "addon": 1}}, "test.yaml")
+
+
 class TestRealWorldBackwardCompat:
     """Guard: a real production scenario file must keep loading unchanged.
 
@@ -88,9 +176,11 @@ class TestRealWorldBackwardCompat:
         data = load_yaml_file(path)
         scenarios = validate_scenarios_document(data, str(path))
         assert len(scenarios) == 2
-        # No setup/options block: extraction must degrade to empty, not raise.
+        # No setup/options/fake_models block: extraction must degrade to empty,
+        # not raise. This is what keeps the 298 files in the wild loading.
         assert extract_setup_steps(data, str(path)) == []
         assert extract_options(data, str(path)) == {}
+        assert extract_fake_models(data, str(path)) == {}
 
     def test_every_action_used_in_the_wild_has_a_handler(self, fixtures_dir) -> None:
         path = fixtures_dir / "real_ssi_amortization.yaml"

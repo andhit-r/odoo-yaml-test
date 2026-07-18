@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-19
+
+First release of the `19.0` branch. Tagged `19.0-v0.5.0`: series branches own their own
+tag namespace so they never collide with `master`'s bare `vX.Y.Z` (see `BRANCHING.md`).
+
+### Added
+- **`fake_models:` — testing an `AbstractModel` without shipping a host addon.** A mixin has
+  no table, so exercising one used to mean creating a whole concrete consumer *module* and
+  shipping it to production purely so a test could call `create()`. That pattern also fails
+  quietly: when the mixin module does not depend on its fixture module, the test `skipTest`s
+  itself and stays green without ever running. The new top-level key names throwaway model
+  classes by import path; they are added to the live registry for the duration of the test
+  method and removed again through `addCleanup`.
+
+  ```yaml
+  fake_models:
+    classes:
+      - "odoo.addons.my_module.tests.fake_models:TestConsumer"
+  ```
+
+  `ir.model.access` rows granting full RWCU to `base.group_user` are created automatically,
+  so `as_user:` steps do not fail with an `AccessError` that says nothing about the subject
+  under test; set `acl: false` to opt out, or `groups:` to choose other groups. The owning
+  addon is derived from the test class's module and can be overridden with `addon:`.
+
+  No new dependency: this uses Odoo 19's own `add_to_registry` rather than the OCA
+  `odoo-test-helper` package, whose `update_registry()` calls `registry.setup_models()` and
+  `registry.load(cr, ...)` — renamed and re-signatured in 19.0. Existing YAML files are
+  unaffected; the machinery is inert unless the key is present.
+
+  **The class module must not be imported while the addon loads** — keep it out of
+  `tests/__init__.py`. Odoo builds every model class imported at load time, which would make
+  the fake model real. The library refuses to run when it detects this.
+
 ### Changed
 - **This branch targets Odoo 19.0.** `_refresh()` now calls `env.flush_all()` and
   `invalidate_recordset()` directly instead of probing for the 14.0 names

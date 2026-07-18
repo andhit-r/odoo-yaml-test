@@ -34,6 +34,7 @@ from unittest import mock
 
 import pytest
 
+from odoo_yaml_test import case as case_module
 from odoo_yaml_test.case import YamlTransactionCase
 from odoo_yaml_test.exceptions import (
     YamlAssertionError,
@@ -194,6 +195,9 @@ class FakeModel:
 
     def fields_get(self, fields: list[str], attributes: list[str]) -> dict[str, dict[str, Any]]:
         return {f: {"type": self._field_types.get(f, "char")} for f in fields}
+
+    def sudo(self) -> FakeModel:
+        return self
 
     def create(self, values: dict[str, Any]) -> FakeRecord:
         record = FakeRecord(self, values)
@@ -1777,3 +1781,380 @@ scenarios:
         case = _make_case(tmp_path)
         _run(case, path)
         assert "journal" not in case.registry
+
+
+# ----------------------------------------------------------------------
+# fake_models:
+# ----------------------------------------------------------------------
+
+
+class FakeRegistry:
+    """Stands in for ``odoo.registry``, recording the calls the seam makes."""
+
+    def __init__(self) -> None:
+        self.models: dict[str, Any] = {"base": object()}
+        self.calls: list[str] = []
+        self.init_args: list[Any] = []
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.models
+
+    def __delitem__(self, name: str) -> None:
+        self.calls.append(f"del:{name}")
+        del self.models[name]
+
+    def _setup_models__(self, cr: Any, model_names: Any) -> None:
+        self.calls.append("setup")
+
+    def init_models(self, cr: Any, names: Any, context: dict[str, Any]) -> None:
+        self.calls.append("init")
+        self.init_args.append((list(names), dict(context)))
+
+
+class FakeAclEnv(FakeEnv):
+    """A FakeEnv that owns a registry and answers ir.model lookups."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.registry = FakeRegistry()
+        self.acl_rows: list[dict[str, Any]] = []
+        self.invalidate_calls: list[int] = []
+        self.invalidate_flush_args: list[bool] = []
+
+    def __getitem__(self, model_name: str) -> Any:
+        if model_name == "ir.model":
+            return _FakeIrModel(self)
+        if model_name == "ir.model.access":
+            return _FakeIrModelAccess(self)
+        return FakeModel(model_name, self)
+
+    def invalidate_all(self, flush: bool = True) -> None:
+        # Record WHEN this ran relative to registry deletions, and with which
+        # flush setting, so the ordering contract in _unload_fake_models can be
+        # asserted.
+        self.invalidate_calls.append(len(self.registry.calls))
+        self.invalidate_flush_args.append(flush)
+        super().invalidate_all(flush=flush)
+
+
+class _FakeIrModel:
+    def __init__(self, env: FakeAclEnv) -> None:
+        self.env = env
+
+    def sudo(self) -> _FakeIrModel:
+        return self
+
+    def search(self, domain: list, **kwargs: Any) -> Any:
+        model_name = domain[0][2]
+        if model_name in self.env.registry.models:
+            return FakeRecord(FakeModel("ir.model", self.env), {"model": model_name})
+        return FakeRecordSet("ir.model", [])
+
+
+class _FakeIrModelAccess:
+    def __init__(self, env: FakeAclEnv) -> None:
+        self.env = env
+
+    def sudo(self) -> _FakeIrModelAccess:
+        return self
+
+    def create(self, values: dict[str, Any]) -> Any:
+        self.env.acl_rows.append(values)
+        return FakeRecord(FakeModel("ir.model.access", self.env), values)
+
+
+class FakeMixinClass:
+    """Stands in for an imported Odoo model class."""
+
+    _name = "fake.mixin"
+    _module = "probe_addon"
+
+
+class FakeConsumerClass:
+    _name = "fake.consumer"
+    _module = "probe_addon"
+
+
+def _make_fake_model_case(tmp_path: Path) -> YamlTransactionCase:
+    case = _make_case(tmp_path)
+    case.env = FakeAclEnv()  # type: ignore[attr-defined]
+    case.cleanups = []  # type: ignore[attr-defined]
+    case.addCleanup = lambda fn, *a, **kw: case.cleanups.append((fn, a, kw))  # type: ignore[attr-defined]
+    case.__class__ = type(
+        "ProbeCase", (YamlTransactionCase,), {"__module__": "odoo.addons.probe_addon.tests.test_x"}
+    )
+    return case
+
+
+@contextmanager
+def _patched_odoo_api(module_to_models: dict[str, list[Any]] | None = None) -> Iterator[list[Any]]:
+    """Patch the two lazy Odoo lookups the seam performs."""
+    added: list[Any] = []
+    mapping = module_to_models if module_to_models is not None else {}
+
+    def _fake_add_to_registry(registry: Any, klass: Any) -> Any:
+        registry.models[klass._name] = klass
+        registry.calls.append(f"add:{klass._name}")
+        added.append(klass)
+        return klass
+
+    with mock.patch.object(case_module, "_add_to_registry", return_value=_fake_add_to_registry):
+        with mock.patch.object(case_module, "_module_to_models", return_value=mapping):
+            yield added
+
+
+FAKE_MODELS_YAML = """
+fake_models:
+  classes:
+    - "tests.test_case_smoke:FakeMixinClass"
+    - "tests.test_case_smoke:FakeConsumerClass"
+
+scenarios:
+  - name: "trivial"
+    steps:
+      - step: "make"
+        action: "create"
+        model: "res.partner"
+        save_as: "p"
+        values: {name: "X"}
+"""
+
+
+class TestFakeModelsNonBreaking:
+    """The new key must be inert for every file that does not use it."""
+
+    def test_absent_key_never_touches_the_machinery(self, tmp_path: Path) -> None:
+        path = _write_yaml(
+            tmp_path,
+            """
+scenarios:
+  - name: "plain"
+    steps:
+      - step: "make"
+        action: "create"
+        model: "res.partner"
+        save_as: "p"
+        values: {name: "X"}
+""",
+        )
+        case = _make_fake_model_case(tmp_path)
+        with mock.patch.object(
+            case, "_setup_fake_models", side_effect=AssertionError("must not be called")
+        ):
+            _run(case, path)
+        assert case.env.registry.calls == []
+
+
+class TestFakeModelsLoading:
+    def test_loads_classes_and_creates_tables(self, tmp_path: Path) -> None:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api() as added:
+            _run(case, path)
+        assert [k._name for k in added] == ["fake.mixin", "fake.consumer"]
+        assert case.env.registry.calls == [
+            "add:fake.mixin",
+            "add:fake.consumer",
+            "setup",
+            "init",
+        ]
+
+    def test_init_models_receives_names_and_addon(self, tmp_path: Path) -> None:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api():
+            _run(case, path)
+        names, context = case.env.registry.init_args[0]
+        assert names == ["fake.mixin", "fake.consumer"]
+        # Addon derived from the test class's __module__, not guessed.
+        assert context == {"module": "probe_addon"}
+
+    def test_explicit_addon_key_wins(self, tmp_path: Path) -> None:
+        path = _write_yaml(
+            tmp_path,
+            FAKE_MODELS_YAML.replace(
+                '    - "tests.test_case_smoke:FakeConsumerClass"',
+                '    - "tests.test_case_smoke:FakeConsumerClass"\n  addon: "other_addon"',
+            ),
+        )
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api():
+            _run(case, path)
+        assert case.env.registry.init_args[0][1] == {"module": "other_addon"}
+
+    def test_undeterminable_addon_raises(self, tmp_path: Path) -> None:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        case.__class__ = type("Outside", (YamlTransactionCase,), {"__module__": "somewhere.else"})
+        with _patched_odoo_api(), pytest.raises(YamlConfigurationError, match="owning addon"):
+            _run(case, path)
+
+    def test_teardown_registered_before_loading(self, tmp_path: Path) -> None:
+        """A load that dies halfway must still unwind the registry."""
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        with mock.patch.object(
+            case, "_load_fake_models", side_effect=RuntimeError("boom")
+        ), pytest.raises(Exception, match="boom"):
+            _run(case, path)
+        assert [fn for fn, _a, _k in case.cleanups] == [case._unload_fake_models]
+
+    def test_second_file_in_one_test_method_raises(self, tmp_path: Path) -> None:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api():
+            _run(case, path)
+            with pytest.raises(YamlConfigurationError, match="already loaded fake models"):
+                _run(case, path)
+
+
+class TestFakeModelsUnloading:
+    def _load(self, tmp_path: Path, mapping: dict[str, list[Any]]) -> YamlTransactionCase:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api(mapping):
+            _run(case, path)
+        return case
+
+    @staticmethod
+    def _run_cleanup(case: YamlTransactionCase, mapping: dict[str, list[Any]]) -> None:
+        """Invoke the registered teardown with the Odoo lookups still patched."""
+        fn, args, kwargs = case.cleanups[0]
+        with mock.patch.object(case_module, "_module_to_models", return_value=mapping):
+            fn(*args, **kwargs)
+
+    def test_invalidate_runs_before_any_deletion(self, tmp_path: Path) -> None:
+        """The ordering contract that a KeyError taught us.
+
+        ``_setup_models__`` internally calls ``env.invalidate_all() ->
+        flush_all()``, which looks every pending model up in the registry.
+        Deleting first leaves the env holding a name the registry no longer
+        has. Against real Odoo 19 that is a KeyError, not a soft failure.
+        """
+        case = self._load(tmp_path, {})
+        case.env.registry.calls.clear()
+        case.env.invalidate_calls.clear()
+
+        self._run_cleanup(case, {})
+
+        assert case.env.invalidate_calls == [0], "invalidate_all must precede every del"
+        assert case.env.registry.calls == ["del:fake.consumer", "del:fake.mixin", "setup"]
+
+    def test_invalidate_does_not_flush(self, tmp_path: Path) -> None:
+        """Flushing needs a healthy cursor; teardown must not require one.
+
+        It would also be wasted work: the values would be written to a table
+        that is about to be dropped from the registry.
+        """
+        case = self._load(tmp_path, {})
+        case.env.invalidate_flush_args.clear()
+        self._run_cleanup(case, {})
+        assert case.env.invalidate_flush_args == [False]
+
+    def test_registry_is_cleaned_even_if_resetup_fails(self, tmp_path: Path) -> None:
+        """A poisoned cursor must not leak the fake model into later tests.
+
+        Registry mutation is process-wide, not transactional. If a scenario
+        aborts the transaction, every statement afterwards raises — including
+        the closing re-setup. Giving up there would leave the fake model in the
+        registry for the rest of the run.
+        """
+        case = self._load(tmp_path, {})
+        case.env.registry._setup_models__ = mock.Mock(  # type: ignore[method-assign]
+            side_effect=RuntimeError("current transaction is aborted")
+        )
+        self._run_cleanup(case, {})
+        assert set(case.env.registry.models) == {"base"}
+        assert case._fake_model_classes is None
+
+    def test_only_models_added_by_us_are_removed(self, tmp_path: Path) -> None:
+        case = self._load(tmp_path, {})
+        self._run_cleanup(case, {})
+        assert set(case.env.registry.models) == {"base"}
+
+    def test_module_to_models_is_cleaned(self, tmp_path: Path) -> None:
+        """Importing the classes registered them; leaving them resurrects them."""
+        mapping: dict[str, list[Any]] = {"probe_addon": [FakeMixinClass, FakeConsumerClass]}
+        case = self._load(tmp_path, mapping)
+        self._run_cleanup(case, mapping)
+        assert mapping["probe_addon"] == []
+
+    def test_unload_clears_the_loaded_marker(self, tmp_path: Path) -> None:
+        case = self._load(tmp_path, {})
+        assert case._fake_model_classes is not None
+        self._run_cleanup(case, {})
+        assert case._fake_model_classes is None
+
+
+class TestFakeModelsAcl:
+    def test_rows_created_for_each_model_and_group(self, tmp_path: Path) -> None:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api():
+            _run(case, path)
+        assert len(case.env.acl_rows) == 2
+        for row in case.env.acl_rows:
+            assert row["perm_read"] and row["perm_write"]
+            assert row["perm_create"] and row["perm_unlink"]
+
+    def test_acl_false_creates_nothing(self, tmp_path: Path) -> None:
+        path = _write_yaml(
+            tmp_path,
+            FAKE_MODELS_YAML.replace(
+                '    - "tests.test_case_smoke:FakeConsumerClass"',
+                '    - "tests.test_case_smoke:FakeConsumerClass"\n  acl: false',
+            ),
+        )
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api():
+            _run(case, path)
+        assert case.env.acl_rows == []
+
+    def test_missing_ir_model_row_is_reported(self, tmp_path: Path) -> None:
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+
+        def _add_without_registering(registry: Any, klass: Any) -> Any:
+            registry.calls.append(f"add:{klass._name}")
+            return klass  # never lands in registry.models -> no ir.model row
+
+        with mock.patch.object(
+            case_module, "_add_to_registry", return_value=_add_without_registering
+        ), mock.patch.object(case_module, "_module_to_models", return_value={}):
+            with pytest.raises(Exception, match="has no ir.model row"):
+                _run(case, path)
+
+
+class TestFakeModelsErrors:
+    def _run_with(self, tmp_path: Path, ref: str) -> None:
+        path = _write_yaml(
+            tmp_path,
+            FAKE_MODELS_YAML.replace(
+                '    - "tests.test_case_smoke:FakeMixinClass"\n'
+                '    - "tests.test_case_smoke:FakeConsumerClass"',
+                f'    - "{ref}"',
+            ),
+        )
+        case = _make_fake_model_case(tmp_path)
+        with _patched_odoo_api():
+            _run(case, path)
+
+    def test_unimportable_module(self, tmp_path: Path) -> None:
+        with pytest.raises(YamlConfigurationError, match="cannot import module"):
+            self._run_with(tmp_path, "no.such.module:Thing")
+
+    def test_missing_attribute_lists_public_names(self, tmp_path: Path) -> None:
+        with pytest.raises(YamlConfigurationError, match="has no attribute 'Nope'"):
+            self._run_with(tmp_path, "tests.test_case_smoke:Nope")
+
+    def test_not_a_model_class(self, tmp_path: Path) -> None:
+        with pytest.raises(YamlConfigurationError, match="not an Odoo model class"):
+            self._run_with(tmp_path, "tests.test_case_smoke:FakeRegistry")
+
+    def test_already_real_model_is_refused(self, tmp_path: Path) -> None:
+        """The fake module leaked into addon load: the model is real now."""
+        path = _write_yaml(tmp_path, FAKE_MODELS_YAML)
+        case = _make_fake_model_case(tmp_path)
+        case.env.registry.models["fake.mixin"] = object()
+        with _patched_odoo_api(), pytest.raises(YamlConfigurationError, match="already exist"):
+            _run(case, path)

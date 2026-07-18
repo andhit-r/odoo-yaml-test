@@ -237,6 +237,44 @@ scenarios:
     steps: [...]          # `journal` is already in the registry
 ```
 
+## Testing a Mixin (`fake_models`)
+
+An `AbstractModel` has no table, so testing one used to mean shipping a whole
+concrete consumer *module* to production just so a test could call `create()`.
+Worse, when the mixin module does not depend on that fixture module, the test
+quietly `skipTest`s itself and stays green without ever running.
+
+Declare throwaway models instead. They are added to the live registry for the
+test method and removed again afterwards:
+
+```yaml
+fake_models:
+  - "odoo.addons.my_module.tests.fake_models:TestConsumer"
+
+scenarios:
+  - name: "the mixin's action transitions state"
+    steps:
+      - step: "Create through the throwaway model"
+        action: "create"
+        model: "my.mixin.consumer"
+        save_as: "rec"
+        values: {name: "probe"}
+
+      - step: "Call the mixin's method"
+        action: "call"
+        target: "rec"
+        method: "action_done"
+```
+
+`ir.model.access` rows are generated automatically, so `as_user:` steps work
+without hand-written security. No extra dependency is required.
+
+> Keep the fixture module out of `tests/__init__.py`. Odoo builds every model
+> class imported while an addon loads, which would make the fake model real.
+> That is why classes are named as strings rather than imported.
+
+See [docs/usage.md](docs/usage.md#fake_models) for the full reference.
+
 ## Cache Refresh (opt-in)
 
 Non-stored compute fields are not invalidated by Odoo when a dependency like

@@ -53,6 +53,15 @@ Consequently, `tests/` cannot exercise a real ORM. `tests/test_case_smoke.py` dr
 action handlers against hand-rolled fake `env`/recordset objects. When you add an action or
 assertion type, extend those fakes rather than reaching for a live database.
 
+The same rule governs `fake_models:`. Its Odoo lookups live in `_add_to_registry()` and
+`_module_to_models()`, which import inside the function exactly like `_error_class()` does,
+and only run when a YAML file actually declares the key. The fakes can only prove the call
+*sequence*; that Odoo really builds the tables, reflects `ir.model`, honours the generated
+ACL, and restores the registry is provable only by the `integration` job. Both were checked
+by mutation: breaking the teardown order turns a specific test red, in `tests/` and in
+`tests_integration/` alike. Keep it that way — a teardown test that cannot fail is worse
+than none, because registry damage is process-wide and silent.
+
 ### The two extension points are named by convention
 
 `_dispatch_step` resolves `action: foo` to `self._action_foo` via `getattr`; `_run_asserts`

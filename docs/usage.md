@@ -10,6 +10,10 @@ project [README](../README.md).
 options:               # optional; file-wide settings
   auto_refresh: true
 
+fake_models:           # optional; throwaway models for testing a mixin
+  classes:
+    - "odoo.addons.my_module.tests.fake_models:TestConsumer"
+
 setup:                 # optional; replayed before EVERY scenario
   steps:
     - step: "Create journal"
@@ -51,6 +55,86 @@ never mistaken for a failure in the scenario body.
 
 Precedence, highest first: a step's `refresh:` key, the scenario's `options`,
 the file's `options`, the test class's `auto_refresh` attribute.
+
+### `fake_models`
+
+Declares model classes to add to the live Odoo registry for the duration of the
+test method. This is how you test an `AbstractModel`: a mixin has no table, so
+something concrete must inherit it before a scenario can `create()` anything.
+
+Short form — a list of class references:
+
+```yaml
+fake_models:
+  - "odoo.addons.my_module.tests.fake_models:TestConsumer"
+```
+
+Long form, with options:
+
+```yaml
+fake_models:
+  classes:
+    - "odoo.addons.my_module.tests.fake_models:MyMixin"
+    - "odoo.addons.my_module.tests.fake_models:TestConsumer"
+  acl: true
+  groups: ["base.group_user"]
+  addon: "my_module"
+```
+
+| Key       | Default                | Meaning                                              |
+| --------- | ---------------------- | ---------------------------------------------------- |
+| `classes` | *(required)*           | `"module.path:ClassName"` references, in load order   |
+| `acl`     | `true`                 | Create full RWCU `ir.model.access` rows               |
+| `groups`  | `["base.group_user"]`  | Groups the generated ACL is granted to                |
+| `addon`   | derived from test class | Addon the models are attributed to                   |
+
+References are **strings, not Python imports** — see the warning below for why
+that is not merely a stylistic choice.
+
+**Lifecycle.** The models are loaded once per file, before the first scenario
+(loading runs DDL, far too expensive to repeat per scenario). They are unloaded
+at the end of the **test method**, via `addCleanup`. Per-scenario isolation is
+unaffected: rows in a fake table roll back with the test transaction like any
+other. Because unloading is per method, one test method may load `fake_models:`
+from only one file; a second raises rather than silently overwriting.
+
+**ACL.** A fake model has no `security/ir.model.access.csv`. The default env is
+superuser and would never notice, but any `as_user:` step would fail with an
+`AccessError` that says nothing about what you are actually testing. Set
+`acl: false` if you want to create the rows yourself.
+
+> **The class module must not be imported while the addon loads.** Keep it out
+> of `tests/__init__.py`, and do not import it at the top of your test file.
+> Odoo builds every model class it sees at load time, so an early import turns
+> the fake model into a real one — with a real table, in every database that
+> installs your addon. Naming the class as a string is what defers the import
+> to the right moment. The library refuses to run when it detects that this has
+> already happened.
+
+Example fixture module (`my_module/tests/fake_models.py`):
+
+```python
+from odoo import fields, models
+
+
+class MyMixin(models.AbstractModel):
+    _name = "my.mixin"
+    _description = "The mixin under test"
+
+    state = fields.Selection([("draft", "Draft"), ("done", "Done")], default="draft")
+
+    def action_done(self):
+        self.write({"state": "done"})
+        return True
+
+
+class TestConsumer(models.Model):
+    _name = "my.mixin.consumer"
+    _inherit = "my.mixin"
+    _description = "Exists only inside a test transaction"
+
+    name = fields.Char(required=True)
+```
 
 ## Actions
 

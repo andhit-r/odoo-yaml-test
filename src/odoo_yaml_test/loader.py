@@ -5,11 +5,22 @@ through PyYAML tags is never permitted.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, FrozenSet, List, Union
 
 import yaml
 
 from .exceptions import YamlConfigurationError
+
+#: Groups granted full RWCU on every fake model when ``acl`` is left on.
+_DEFAULT_FAKE_MODEL_GROUPS: List[str] = ["base.group_user"]
+
+#: Keys accepted inside a ``fake_models:`` mapping.
+#:
+#: Unlike the top-level document — which is deliberately pull-based and ignores
+#: unknown keys so old files keep loading — this block *is* whitelisted. It is
+#: brand new, so nothing can break by being strict, and a silently ignored
+#: ``acls: false`` typo would hand the scenario an ACL it explicitly declined.
+_FAKE_MODEL_KEYS: FrozenSet[str] = frozenset({"classes", "acl", "groups", "addon"})
 
 
 def load_yaml_file(path: Union[str, Path]) -> Dict[str, Any]:
@@ -138,3 +149,109 @@ def extract_options(data: Dict[str, Any], source: str) -> Dict[str, Any]:
             f"'options' in {source} must be a mapping, got {type(options).__name__}"
         )
     return options
+
+
+def _validate_class_references(classes: Any, source: str) -> List[str]:
+    """Validate ``fake_models.classes`` and return it as a list of strings."""
+    if not isinstance(classes, list) or not classes:
+        raise YamlConfigurationError(
+            f"'fake_models.classes' in {source} must be a non-empty list of "
+            f"'module.path:ClassName' strings"
+        )
+    for index, ref in enumerate(classes):
+        if not isinstance(ref, str):
+            raise YamlConfigurationError(
+                f"'fake_models.classes[{index}]' in {source} must be a string, "
+                f"got {type(ref).__name__}"
+            )
+        module_name, separator, class_name = ref.partition(":")
+        if not separator or not module_name.strip() or not class_name.strip():
+            raise YamlConfigurationError(
+                f"'fake_models.classes[{index}]' in {source} must have the form "
+                f"'module.path:ClassName' — a single ':' separating an importable "
+                f"module from a class name — got {ref!r}"
+            )
+    return list(classes)
+
+
+def _validate_group_references(groups: Any, source: str) -> List[str]:
+    """Validate ``fake_models.groups`` and return it as a list of strings."""
+    if not isinstance(groups, list) or not groups:
+        raise YamlConfigurationError(
+            f"'fake_models.groups' in {source} must be a non-empty list of xml_id strings"
+        )
+    for index, group in enumerate(groups):
+        if not isinstance(group, str):
+            raise YamlConfigurationError(
+                f"'fake_models.groups[{index}]' in {source} must be a string, "
+                f"got {type(group).__name__}"
+            )
+    return list(groups)
+
+
+def extract_fake_models(data: Dict[str, Any], source: str) -> Dict[str, Any]:
+    """Return the normalised top-level ``fake_models:`` block.
+
+    Accepts a short form (a plain list of ``"module.path:ClassName"`` strings)
+    or a long form (a mapping with ``classes`` plus options). Both normalise to
+    the same shape, so callers never branch on which was written.
+
+    Class references are *strings*, not Python imports, on purpose: the classes
+    must not be imported until the registry has been snapshotted, and a string
+    is the only way a YAML file can name one without importing it.
+
+    Args:
+        data: Parsed YAML mapping.
+        source: A label identifying the source (file path) for errors.
+
+    Returns:
+        A mapping with keys ``classes`` (list of str), ``acl`` (bool),
+        ``groups`` (list of str) and ``addon`` (str or None). Empty dict when
+        the document declares no ``fake_models``.
+
+    Raises:
+        YamlConfigurationError: when ``fake_models`` is present but malformed.
+    """
+    raw = data.get("fake_models")
+    if raw is None:
+        return {}
+
+    if isinstance(raw, list):
+        block: Dict[str, Any] = {"classes": raw}
+    elif isinstance(raw, dict):
+        block = dict(raw)
+    else:
+        raise YamlConfigurationError(
+            f"'fake_models' in {source} must be a list of class references or a "
+            f"mapping with a 'classes' list, got {type(raw).__name__}"
+        )
+
+    unknown = sorted(set(block) - _FAKE_MODEL_KEYS)
+    if unknown:
+        raise YamlConfigurationError(
+            f"Unknown key(s) {unknown} in 'fake_models' of {source}. "
+            f"Valid keys: {sorted(_FAKE_MODEL_KEYS)}"
+        )
+
+    classes = _validate_class_references(block.get("classes"), source)
+
+    acl = block.get("acl", True)
+    if not isinstance(acl, bool):
+        raise YamlConfigurationError(
+            f"'fake_models.acl' in {source} must be a boolean, got {type(acl).__name__}"
+        )
+
+    groups = _validate_group_references(block.get("groups", _DEFAULT_FAKE_MODEL_GROUPS), source)
+
+    addon = block.get("addon")
+    if addon is not None and not isinstance(addon, str):
+        raise YamlConfigurationError(
+            f"'fake_models.addon' in {source} must be a string, got {type(addon).__name__}"
+        )
+
+    return {
+        "classes": classes,
+        "acl": acl,
+        "groups": groups,
+        "addon": addon,
+    }

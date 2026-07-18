@@ -5,6 +5,7 @@ importable in environments where Odoo is not installed (CI linting,
 unit-testing the evaluator, etc.).
 """
 
+import importlib
 import inspect
 import logging
 import re
@@ -15,6 +16,7 @@ from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Tuple, Type
 from .evaluator import safe_eval
 from .exceptions import YamlAssertionError, YamlConfigurationError, YamlStepError
 from .loader import (
+    extract_fake_models,
     extract_options,
     extract_setup_steps,
     load_yaml_file,
@@ -123,6 +125,44 @@ def _error_class(name: str) -> Type[BaseException]:
     raise YamlConfigurationError(f"Unknown expect_error type {name!r}. Known: {known}")
 
 
+def _add_to_registry() -> Any:
+    """Return Odoo 19's ``add_to_registry``, lazily.
+
+    Lazy for the same reason as :func:`_error_class`: Odoo stays an optional
+    import so the package remains usable (and lintable) without it.
+
+    This branch targets Odoo 19.0 and calls that series' API directly. The 14.0
+    equivalent — ``BaseModel._build_model(pool, cr)`` — was removed in 19.0, and
+    probing for either with ``getattr`` would reintroduce exactly the silent
+    no-op that ``_refresh()`` once became. If the API is missing, raise.
+    """
+    try:
+        from odoo.orm.model_classes import add_to_registry
+    except ImportError as exc:  # pragma: no cover - only without Odoo 19
+        raise YamlConfigurationError(
+            "'fake_models:' requires odoo.orm.model_classes.add_to_registry, "
+            "which is Odoo 19.0+. On Odoo 14.0 use the 'master' branch of "
+            "odoo-yaml-test instead."
+        ) from exc
+    return add_to_registry
+
+
+def _module_to_models() -> Any:
+    """Return Odoo 19's ``MetaModel._module_to_models__`` mapping, lazily.
+
+    Importing a model class registers it here, keyed by ``_module``. A fake
+    model must be removed again on teardown, otherwise the next
+    ``registry.load()`` for that addon would resurrect it.
+    """
+    try:
+        from odoo.orm.models import MetaModel
+    except ImportError as exc:  # pragma: no cover - only without Odoo 19
+        raise YamlConfigurationError(
+            "'fake_models:' requires odoo.orm.models.MetaModel (Odoo 19.0+)"
+        ) from exc
+    return MetaModel._module_to_models__
+
+
 class _FormProxy:
     """Adapts an Odoo ``Form`` so the ``_assert_*`` methods can read it.
 
@@ -176,6 +216,11 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
     #: ``form`` action imports ``odoo.tests.common.Form`` lazily.
     form_class: Any = None
 
+    #: Fake model classes loaded by ``fake_models:``, or None when a file
+    #: declared none. NOT related to :attr:`registry` — that is the YAML alias
+    #: map; this concerns the real ``odoo.registry``.
+    _fake_model_classes: Optional[List[Any]] = None
+
     def setUp(self) -> None:
         super().setUp()
         self._reset_registry()
@@ -205,6 +250,15 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         scenarios = validate_scenarios_document(document, source)
         setup_steps = extract_setup_steps(document, source)
         file_options = extract_options(document, source)
+
+        # Once per FILE, before the scenario loop. Loading a fake model runs
+        # DDL (init_models), far too expensive to repeat per scenario — and
+        # pointless, because a model's *schema* is not the state that
+        # _reset_registry() isolates. Per-scenario isolation still holds: rows
+        # in a fake table roll back with the test transaction like any other.
+        fake_models = extract_fake_models(document, source)
+        if fake_models:
+            self._setup_fake_models(fake_models, source)
 
         for scenario in scenarios:
             scenario_name = scenario["name"]
@@ -255,6 +309,223 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         if not resolved.is_file():
             raise YamlConfigurationError(f"YAML file {filename!r} not found at {resolved}")
         return resolved
+
+    # ------------------------------------------------------------------
+    # Fake models
+    # ------------------------------------------------------------------
+
+    def _setup_fake_models(self, spec: Dict[str, Any], source: str) -> None:
+        """Load the YAML-declared fake models into the live Odoo registry.
+
+        The ordering here is load-bearing:
+
+        1. Import the classes and check none of them already exists. A name
+           that is already in the registry means the class was imported at
+           addon-load time and Odoo built it as a *real* model — see
+           :meth:`_check_not_already_real`.
+        2. Snapshot the registry, then register the teardown *before* loading,
+           so a load that fails halfway still unwinds.
+        3. Load, then grant ACLs.
+        """
+        if self._fake_model_classes is not None:
+            raise YamlConfigurationError(
+                f"{source} declares 'fake_models', but this test method already "
+                f"loaded fake models from an earlier YAML file. Merge the blocks "
+                f"into one file, or give each file its own test method."
+            )
+
+        addon = self._fake_model_addon(spec, source)
+        classes = [self._import_fake_model_class(ref, source) for ref in spec["classes"]]
+        self._check_not_already_real(classes, source)
+
+        registry = self.env.registry
+        baseline = frozenset(registry.models)
+        self._fake_model_classes = classes
+        self.addCleanup(self._unload_fake_models, classes, baseline)
+
+        names = self._load_fake_models(classes, addon)
+
+        if spec["acl"]:
+            self._grant_fake_model_access(names, spec["groups"], source)
+
+    def _fake_model_addon(self, spec: Dict[str, Any], source: str) -> str:
+        """Return the addon name that owns the fake models."""
+        addon = spec.get("addon")
+        if addon:
+            return str(addon)
+
+        module_path = type(self).__module__
+        parts = module_path.split(".")
+        if len(parts) < 3 or parts[0] != "odoo" or parts[1] != "addons":
+            raise YamlConfigurationError(
+                f"'fake_models' in {source} cannot determine the owning addon: the "
+                f"test class {type(self).__name__} lives in {module_path!r}, which "
+                f"is not under 'odoo.addons.<addon>'. Name the addon explicitly "
+                f"with a 'fake_models.addon:' key."
+            )
+        return parts[2]
+
+    @staticmethod
+    def _import_fake_model_class(ref: str, source: str) -> Any:
+        """Import ``module:Class`` and verify it is an Odoo model class."""
+        module_name, _, class_name = ref.partition(":")
+
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            raise YamlConfigurationError(
+                f"'fake_models' in {source}: cannot import module {module_name!r} "
+                f"({exc}). The part before ':' must be an importable module, e.g. "
+                f"'odoo.addons.my_module.tests.fake_models'."
+            ) from exc
+
+        klass = getattr(module, class_name, None)
+        if klass is None:
+            public = sorted(name for name in vars(module) if not name.startswith("_"))
+            raise YamlConfigurationError(
+                f"'fake_models' in {source}: module {module_name!r} has no attribute "
+                f"{class_name!r}. Defined names: {public}"
+            )
+        if not isinstance(klass, type) or not isinstance(getattr(klass, "_name", None), str):
+            raise YamlConfigurationError(
+                f"'fake_models' in {source}: {ref} is not an Odoo model class (no "
+                f"string '_name'); got {klass!r}. It must subclass models.Model, "
+                f"models.AbstractModel or models.TransientModel."
+            )
+        return klass
+
+    def _check_not_already_real(self, classes: List[Any], source: str) -> None:
+        """Refuse to run when a fake model is already a real registry model.
+
+        Odoo builds every model class that is imported while an addon loads. If
+        ``fake_models.py`` is imported from ``tests/__init__.py`` (or from the
+        addon itself), its models are created for real in the database and this
+        library would then silently "unload" a model the addon legitimately
+        owns. Catch that here rather than corrupting the registry.
+        """
+        registry = self.env.registry
+        already = [klass._name for klass in classes if klass._name in registry]
+        if already:
+            raise YamlConfigurationError(
+                f"'fake_models' in {source}: {already} already exist in the registry. "
+                f"A fake model module must NOT be imported while the addon loads — "
+                f"remove it from tests/__init__.py (and from any addon-level import), "
+                f"so only 'fake_models:' pulls it in."
+            )
+
+    def _grant_fake_model_access(
+        self, model_names: List[str], groups: List[str], source: str
+    ) -> None:
+        """Create full RWCU ``ir.model.access`` rows for the fake models.
+
+        A fake model has no ``security/ir.model.access.csv``. The default env is
+        superuser and would never notice, but any ``as_user:`` step would fail
+        with an AccessError that says nothing about the subject under test.
+        """
+        ir_model = self.env["ir.model"].sudo()
+        ir_access = self.env["ir.model.access"].sudo()
+        for model_name in model_names:
+            record = ir_model.search([("model", "=", model_name)], limit=1)
+            if not record:
+                raise YamlStepError(
+                    f"'fake_models' in {source}: model {model_name!r} was loaded but "
+                    f"has no ir.model row, so its ACL cannot be created. Set "
+                    f"'fake_models.acl: false' and create the ir.model.access "
+                    f"records yourself in a setup step."
+                )
+            for group_xml_id in groups:
+                ir_access.create(
+                    {
+                        "name": "yaml_test_fake_{}_{}".format(
+                            model_name.replace(".", "_"), group_xml_id.replace(".", "_")
+                        ),
+                        "model_id": record.id,
+                        "group_id": self.env.ref(group_xml_id).id,
+                        "perm_read": True,
+                        "perm_write": True,
+                        "perm_create": True,
+                        "perm_unlink": True,
+                    }
+                )
+
+    # -- version-coupled seam (see BRANCHING.md) ------------------------
+
+    def _load_fake_models(self, classes: List[Any], addon: str) -> List[str]:
+        """Add *classes* to the live registry and create their tables.
+
+        Odoo 19.0 API. ``_setup_models__(cr, [])`` performs an incremental
+        setup — verified sufficient for brand-new models, not only for the
+        model *extensions* the core tests use it for.
+        """
+        add_to_registry = _add_to_registry()
+        registry = self.env.registry
+        for klass in classes:
+            add_to_registry(registry, klass)
+        names = [klass._name for klass in classes]
+        registry._setup_models__(self.env.cr, [])
+        registry.init_models(self.env.cr, names, {"module": addon})
+        return names
+
+    def _unload_fake_models(self, classes: List[Any], baseline: FrozenSet[str]) -> None:
+        """Remove the fake models again. Registered via ``addCleanup``.
+
+        Order matters, and the reason is not obvious:
+
+        ``invalidate_all()`` must come *first*. ``_setup_models__`` itself calls
+        ``env.invalidate_all() -> flush_all()``, which iterates the models with
+        pending changes and looks each one up in the registry. Deleting first
+        leaves the env holding a name the registry no longer has, and the
+        re-setup dies with ``KeyError``. The core tests never hit this because
+        they never create records on the model they throw away.
+
+        ``flush=False`` matters just as much. Flushing would write pending
+        values out to a table that is about to be discarded — pointless work,
+        and it needs a healthy cursor. A scenario that failed mid-transaction
+        leaves the cursor aborted, and every statement then raises. Registry
+        mutation is process-wide, not transactional, so a teardown that gave up
+        there would leak the fake model into every later test in the run.
+
+        Deletion goes through ``del registry[name]``, not
+        ``del registry.models[name]``: only the former also discards the name
+        from every other model's ``_inherit_children``.
+
+        The classes are then removed from ``MetaModel._module_to_models__``,
+        which importing them populated. Left behind, the next
+        ``registry.load()`` for that addon would resurrect them.
+
+        Everything above is pure Python. Only the closing re-setup touches the
+        database, so only it is best-effort: by that point the fake models are
+        already gone from the registry, and a warning beats masking the
+        scenario's real failure behind a teardown error.
+        """
+        self._fake_model_classes = None
+        env = getattr(self, "env", None)
+        if env is None:  # pragma: no cover - defensive
+            return
+        registry = env.registry
+
+        env.invalidate_all(flush=False)
+        for name in sorted(frozenset(registry.models) - baseline):
+            del registry[name]
+
+        module_to_models = _module_to_models()
+        for klass in classes:
+            module = getattr(klass, "_module", None)
+            if module and klass in module_to_models.get(module, []):
+                module_to_models[module].remove(klass)
+
+        try:
+            registry._setup_models__(env.cr, [])
+        except Exception as exc:
+            _LOGGER.warning(
+                "fake_models: could not re-setup the registry after unloading %s "
+                "(%s: %s). The fake models themselves were removed, so later tests "
+                "are unaffected; this usually means the scenario left the cursor in "
+                "an aborted transaction.",
+                [klass._name for klass in classes],
+                type(exc).__name__,
+                exc,
+            )
 
     @staticmethod
     def _step_context(

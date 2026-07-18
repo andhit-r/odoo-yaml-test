@@ -24,6 +24,13 @@ Only these. Everything else must stay byte-identical so `git cherry-pick` keeps 
 - `_refresh()` and `_savepoint()` in `case.py` — the ORM cache API is the one thing that
   genuinely changed across series (see table below).
 - The `Form` import in `_get_form_class()` (`case.py`) — see "Where Form lives" below.
+- `_add_to_registry()`, `_module_to_models()`, `_load_fake_models()` and
+  `_unload_fake_models()` in `case.py` — the registry-mutation API behind `fake_models:`.
+  See "Where the registry API lives" below. Everything else about the feature —
+  `extract_fake_models()`, the import and validation helpers, ACL generation — is
+  series-agnostic and must stay byte-identical.
+- `version` in `tests_integration/addons/yaml_test_probe/__manifest__.py` — Odoo refuses a
+  manifest whose version does not match the series.
 - `requires-python` in `pyproject.toml` **and** `setup.cfg` (they are not derived from
   each other).
 - The `Framework :: Odoo :: <series>` classifier and the `Programming Language :: Python`
@@ -48,6 +55,36 @@ Only these. Everything else must stay byte-identical so `git cherry-pick` keeps 
 A branch that targets one series calls that series' API directly instead of leaning on a
 back-compat shim; that is the same principle that forbids the `getattr` probe in
 `_refresh()`.
+
+### Where the registry API lives
+
+`fake_models:` adds model classes to a live registry and takes them out again. Every call
+it makes was renamed or removed in 19.0:
+
+| What | 14.0 | 19.0 |
+|---|---|---|
+| build a model class | `Model._build_model(pool, cr)` | `add_to_registry(registry, model_def)` (`odoo.orm.model_classes`) |
+| re-run setup | `registry.setup_models(cr)` | `registry._setup_models__(cr, model_names=None)` |
+| class-per-module map | `MetaModel.module_to_models` | `MetaModel._module_to_models__` |
+| create tables | `registry.init_models(cr, names, ctx)` | unchanged |
+| drop a model | `del registry[name]` | unchanged |
+
+This is also why the OCA `odoo-test-helper` package is **not** used: its `update_registry()`
+calls `registry.setup_models()` and `registry.load(cr, FakePackage(...))`, and 19.0 renamed
+the first and re-signatured the second to `load(module: ModuleNode)`. Neither is guarded by
+a capability check, so it fails outright on 19. Writing ~15 lines against each series' own
+API is cheaper than owning a shim, and keeps the dependency list at two packages.
+
+Two ordering rules in `_unload_fake_models()` are not optional, and neither is obvious from
+reading the core tests (which never create records on the model they discard):
+
+1. **`env.invalidate_all(flush=False)` runs before any deletion.** `_setup_models__`
+   internally calls `env.invalidate_all() -> flush_all()`, which looks up every model with
+   pending changes. Delete first and the re-setup dies with `KeyError`.
+2. **`flush=False`, and the closing re-setup is best-effort.** Registry mutation is
+   process-wide, not transactional. A scenario that aborted the transaction leaves the
+   cursor unusable, and a teardown that raised there would leak the fake model into every
+   later test in the run.
 
 ### ORM cache API per series
 
@@ -108,6 +145,22 @@ git cherry-pick <sha-from-master>
 Conflicts should only ever appear in `_refresh()`/`_savepoint()` or packaging metadata.
 A conflict anywhere else means the syntax-alignment rule above was broken — fix that,
 do not paper over it.
+
+### Exception: a feature whose risk lives in the newer series
+
+A *feature* may land on the newest series branch first and be back-ported to `master`
+afterwards, when that is where its uncertainty is. `fake_models:` was done this way: it
+rests entirely on registry APIs that 19.0 renamed or removed, so building it on `master`
+first would have meant designing against 14.0 and only then discovering whether the 19.0
+equivalents even exist. `19.0` also carries less risk to land on — it has no release tag
+yet, while every SSI addon repo pins `@master`.
+
+This tightens the syntax-alignment rule rather than relaxing it: the code is written on a
+branch whose `requires-python` is `>=3.10` but must stay valid on `>=3.8`, with no PEP 604
+unions and no builtin generics. `[tool.ruff] target-version = "py38"` is what enforces it —
+leave it alone.
+
+**Bug fixes still flow oldest → newest.** This exception is for new features only.
 
 ## Tags and releases
 
