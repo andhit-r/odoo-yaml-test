@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the new `BRANCHING.md`.
 
 ### Fixed
+- **`action: wizard` accepts a multi-record `target` instead of raising
+  `Expected singleton`.** The wizard context was built with `"active_id": target.id`,
+  and `id` goes through Odoo's field descriptor, which calls `ensure_one()`. So any
+  target holding more than one record blew up before the wizard was ever created —
+  even though `active_ids` on the very next line was already correct. That locked the
+  action to a single record, which is the opposite of what it exists to imitate: a
+  wizard launched from a multi-row selection in a list view. `active_id` is now read
+  off `target.ids`, matching what the web client sends — the whole selection in
+  `active_ids`, its first element in `active_id`. An empty target is legal and yields
+  `active_id: False` with `active_ids: []`. `asserts` still run against the target
+  itself and therefore still require a singleton; assert the outcome of a multi-record
+  wizard through `action: search` over the resulting documents.
 - **`asserts` inside `action: form` no longer crash on any field.** `_read_path`
   detected "empty container" via `hasattr(current, "__len__")`. A real Odoo
   `Form` (and the library's `_FormProxy` wrapper around one) raises

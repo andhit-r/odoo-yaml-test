@@ -482,6 +482,26 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         ``active_model`` / ``active_id`` / ``active_ids`` in the context —
         then optionally calls a method on it. This is what makes SSI's
         cancel/terminate reason wizards reachable from YAML.
+
+        ``target`` may hold a recordset of **any** length, mirroring a wizard
+        launched from a multi-row selection in a list view: ``active_ids``
+        carries the whole selection and ``active_id`` the first element, which
+        is exactly what the web client sends. An empty target is legal too —
+        ``active_id`` is then ``False`` and ``active_ids`` empty, and the
+        wizard is still created.
+
+        Note:
+            ``active_id`` is read off ``target.ids``, never off ``target.id``:
+            the ``id`` field descriptor calls ``ensure_one()``, so a target
+            holding more than one record used to raise
+            ``ValueError: Expected singleton`` before the wizard was ever
+            created.
+
+        Warning:
+            ``asserts`` still run against ``target`` itself, so asserting on a
+            multi-record target raises Odoo's singleton error. That is
+            deliberate — assert the outcome of a multi-record wizard via
+            ``action: search`` on the resulting documents instead.
         """
         model_name = self._require(step, "model")
         # NB: the target key is 'target', not 'on' — YAML 1.1 parses a bare
@@ -489,10 +509,14 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         target = self._resolve_target(self._require(step, "target"))
 
         # The wizard context is a default: an explicit `context:` wins.
+        # active_id comes from ids[0], not from `.id`: reading `.id` off a
+        # multi-record target goes through Field.__get__ -> ensure_one() and
+        # raises, which is precisely the multi-select case we want to support.
+        target_ids = list(target.ids)
         wizard_ctx = {
             "active_model": target._name,
-            "active_id": target.id,
-            "active_ids": list(target.ids),
+            "active_id": target_ids[0] if target_ids else False,
+            "active_ids": target_ids,
         }
         env = self._build_env(step, base_context=wizard_ctx)
         model = env[model_name]
