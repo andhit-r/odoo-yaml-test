@@ -42,6 +42,9 @@ Only these. Everything else must stay byte-identical so `git cherry-pick` keeps 
   before a single test runs. Odoo 19 needs Python ≥ 3.10 (`odoo/release.py`:
   `MIN_PY_VERSION = (3, 10)`), so the `19.0` branch drops the 3.8/3.9 entries `master`
   keeps.
+- `CHANGELOG.md` below `## [Unreleased]` — each series releases on its own tag namespace,
+  so the released sections diverge by construction. See "Cherry-picking a `CHANGELOG.md`
+  entry lands it in the wrong section" below for the trap that creates.
 
 ### Where `Form` lives
 
@@ -145,6 +148,25 @@ git cherry-pick <sha-from-master>
 Conflicts should only ever appear in `_refresh()`/`_savepoint()` or packaging metadata.
 A conflict anywhere else means the syntax-alignment rule above was broken — fix that,
 do not paper over it.
+
+### Cherry-picking a `CHANGELOG.md` entry lands it in the wrong section
+
+`git cherry-pick` matches surrounding context, not headings, and `CHANGELOG.md` is the one
+file where that reliably picks the wrong place. The released sections differ per branch:
+`19.0` carries a `## [0.5.0]` that `master` does not. An entry added on `master` under
+`## [Unreleased]` → `### Fixed` finds a `### Fixed` on `19.0` as well — inside the
+already-released `## [0.5.0]` block — and applies there **cleanly**. No conflict, no
+warning, and a shipped release quietly grows a line it never contained.
+
+That is the dangerous part: unlike the source-syntax conflicts above, this one does not
+announce itself. So after every cherry-pick that touches `CHANGELOG.md`, read the result
+before pushing — the entry belongs under `## [Unreleased]`. If it landed elsewhere, move
+it and `git commit --amend`.
+
+Expect this indefinitely rather than treating it as a one-off. Divergent released sections
+are the normal steady state, not a defect to be repaired: the branches release
+independently (see "Tags and releases"), so `CHANGELOG.md` cannot be held byte-identical
+the way the source is.
 
 ### Exception: a feature whose risk lives in the newer series
 
