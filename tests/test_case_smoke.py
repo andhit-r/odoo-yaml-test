@@ -155,6 +155,28 @@ class FakeRecordSet:
     def ids(self) -> list[int]:
         return [rec.id for rec in self._records]
 
+    @property
+    def id(self) -> int | bool:
+        """Mirror Odoo's ``id`` field descriptor, ``ensure_one()`` included.
+
+        ``fields.Id.__get__`` returns ``False`` for an empty recordset, the id
+        for a singleton, and raises ``ValueError("Expected singleton")`` above
+        that. Without that last branch a regression in ``_action_wizard`` would
+        surface here as a bland ``AttributeError`` — or not at all — instead of
+        the singleton error real Odoo raises.
+
+        Returns:
+            The record's id, or ``False`` when the recordset is empty.
+
+        Raises:
+            ValueError: If the recordset holds more than one record.
+        """
+        if not self._records:
+            return False
+        if len(self._records) > 1:
+            raise ValueError(f"Expected singleton: {self._name}({self.ids})")
+        return self._records[0].id
+
     def __len__(self) -> int:
         return len(self._records)
 
@@ -1511,6 +1533,104 @@ scenarios:
         case = _make_case(tmp_path)
         _run(case, path)
         assert case.registry["wiz"].env.context["active_model"] == "custom.model"
+
+
+class TestActionWizardMultiRecord:
+    """``action: wizard`` over a target holding more than one record.
+
+    The recordsets here are seeded straight into ``case.registry`` and
+    ``_action_wizard`` is called directly, rather than going through ``_run``:
+    ``run_yaml_scenario`` opens with ``_reset_registry()``, which would drop any
+    alias seeded beforehand. ``FakeModel.search`` always yields an *empty*
+    ``FakeRecordSet``, so an ``action: search`` step cannot produce a
+    multi-record target either.
+    """
+
+    @staticmethod
+    def _seed(case: YamlTransactionCase, model_name: str, count: int) -> list[FakeRecord]:
+        """Bind a ``count``-record recordset to the ``docs`` alias."""
+        model = FakeModel(model_name, case.env)
+        records = [FakeRecord(model, {"state": "open"}) for _ in range(count)]
+        case.registry["docs"] = FakeRecordSet(model_name, records)
+        return records
+
+    def test_multi_record_target_fills_active_ids_and_first_active_id(self, tmp_path: Path) -> None:
+        """Three selected rows reach the wizard the way the list view sends them."""
+        case = _make_case(tmp_path)
+        records = self._seed(case, "account.amortization", 3)
+
+        case._action_wizard(
+            {
+                "action": "wizard",
+                "model": "base.select_cancel_reason",
+                "target": "docs",
+                "save_as": "wiz",
+                "values": {},
+            }
+        )
+
+        ctx = case.registry["wiz"].env.context
+        assert ctx["active_model"] == "account.amortization"
+        assert ctx["active_ids"] == [rec.id for rec in records]
+        assert ctx["active_id"] == records[0].id
+
+    def test_empty_target_is_legal_and_yields_false_active_id(self, tmp_path: Path) -> None:
+        """An empty selection still opens the wizard instead of blowing up."""
+        case = _make_case(tmp_path)
+        self._seed(case, "account.amortization", 0)
+
+        case._action_wizard(
+            {
+                "action": "wizard",
+                "model": "base.select_cancel_reason",
+                "target": "docs",
+                "save_as": "wiz",
+                "values": {},
+            }
+        )
+
+        ctx = case.registry["wiz"].env.context
+        assert ctx["active_id"] is False
+        assert ctx["active_ids"] == []
+
+    def test_explicit_context_still_wins_for_a_multi_record_target(self, tmp_path: Path) -> None:
+        """``context:`` overrides the wizard defaults regardless of target length."""
+        case = _make_case(tmp_path)
+        records = self._seed(case, "sale.order", 3)
+
+        case._action_wizard(
+            {
+                "action": "wizard",
+                "model": "some.wizard",
+                "target": "docs",
+                "save_as": "wiz",
+                "context": {"active_model": "custom.model"},
+                "values": {},
+            }
+        )
+
+        ctx = case.registry["wiz"].env.context
+        assert ctx["active_model"] == "custom.model"
+        assert ctx["active_ids"] == [rec.id for rec in records]
+
+    def test_fake_recordset_id_mirrors_ensure_one(self, tmp_path: Path) -> None:
+        """Guard the guard: without this, the multi-record test cannot fail.
+
+        ``FakeRecordSet.id`` is the only thing that makes a regression back to
+        ``target.id`` surface as Odoo's singleton error rather than passing
+        silently.
+        """
+        case = _make_case(tmp_path)
+        model = FakeModel("res.partner", case.env)
+
+        assert FakeRecordSet("res.partner", []).id is False
+
+        single = FakeRecord(model, {})
+        assert FakeRecordSet("res.partner", [single]).id == single.id
+
+        pair = FakeRecordSet("res.partner", [FakeRecord(model, {}), FakeRecord(model, {})])
+        with pytest.raises(ValueError, match="Expected singleton"):
+            _ = pair.id
 
 
 # ----------------------------------------------------------------------

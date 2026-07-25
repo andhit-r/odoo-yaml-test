@@ -234,6 +234,26 @@ The key is `target:`, **not** `on:` — YAML 1.1 parses a bare `on:` key as the
 boolean `True`. An explicit `context:` on the step overrides the `active_*`
 defaults.
 
+`target:` may hold a recordset of **any** length, which is how you reproduce a
+wizard launched from a multi-row selection in a list view. The context is filled
+exactly as the web client fills it: `active_ids` gets the whole selection and
+`active_id` its first element. An empty target is legal too — `active_id` is
+then `False` and `active_ids` empty, and the wizard is still created.
+
+```yaml
+- step: "Generate VA for every selected partner"
+  action: "wizard"
+  model: "partner.generate_va"
+  target: "partners"            # a recordset of 3 -> active_ids has all 3
+  values: {}
+  method: "action_generate"
+```
+
+One limitation to know about: `asserts:` still run against `target` itself, so
+asserting on a multi-record target raises Odoo's `Expected singleton` error.
+That is deliberate. Assert the outcome of a multi-record wizard with a separate
+`action: search` over the resulting documents instead of over the target.
+
 ### `form`
 
 Drives Odoo's `Form` API. This is the only way to exercise `@api.onchange`:
