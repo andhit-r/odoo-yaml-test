@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **x2many membership asserts inside `action: form` no longer raise
+  `Cannot interpret <M2MProxy …> as a record reference`.** Inside a form, a
+  relational field reads as Odoo's form proxy, not a recordset. In Odoo 14 the
+  many2many proxy (`odoo.tests.common.M2MProxy`) is a `collections.abc.Sequence`
+  of records with no `.ids` of its own, while `_coerce_to_ids` accepted only ints,
+  objects with `.ids`, and `list`/`tuple`/`set` — so `check: contains`, `exact` and
+  the `*_xml_ids` spellings all failed, and only `check: count` (plain `len()`)
+  worked. Any `Sequence` is now walked item by item; `str` and `bytes` are still
+  rejected, as is any other unrecognised value. Found through
+  `open-synergy/ssi-budget` PR #53.
+- **A one2many inside a form now fails with an error that names the workaround.**
+  Odoo 14's `O2MProxy` is neither a `Sequence` nor exposes ids through any public
+  API, and rows added in the form have no id at all yet. Rather than reading
+  `Form` internals, membership checks on it raise `YamlConfigurationError` telling
+  the author to use `check: count` inside the form, or to save it (`save_as`) and
+  assert membership on the saved record.
+
 ## [0.5.0] - 2026-07-26
 
 ### Added

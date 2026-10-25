@@ -1,0 +1,27 @@
+scenarios:
+  - name: "many2many membership is assertable inside a form"
+    steps:
+      - step: "Create the tag the probe will carry"
+        action: "create"
+        model: "res.partner.category"
+        save_as: "tag"
+        values:
+          name: "probe tag"
+
+      - step: "Create a probe already linked to the tag"
+        action: "create"
+        model: "yaml.test.probe"
+        save_as: "probe"
+        values:
+          name: "probe"
+          tag_ids: [[6, 0, ["REC: tag.id"]]]
+
+      - step: "Open the probe in a form; tag_ids is an M2MProxy there"
+        action: "form"
+        target: "probe"
+        save: false
+        asserts:
+          tag_ids:
+            type: "m2m"
+            check: "exact"
+            expected_records: ["REC: tag"]

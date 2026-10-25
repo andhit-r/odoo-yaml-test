@@ -17,6 +17,14 @@ class YamlTestProbe(models.Model):
         default=0,
         help="The value mirror() doubles. Writing this is what makes mirror stale.",
     )
+    tag_ids = fields.Many2many(
+        comodel_name="res.partner.category",
+        string="Tags",
+        help=(
+            "Read through a Form this is an M2MProxy, which has no ids of its "
+            "own; asserting membership on it is what form_x2m_probe covers."
+        ),
+    )
     mirror = fields.Integer(
         string="Mirror",
         compute="_compute_mirror",
