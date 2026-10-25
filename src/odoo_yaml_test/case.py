@@ -5,6 +5,7 @@ importable in environments where Odoo is not installed (CI linting,
 unit-testing the evaluator, etc.).
 """
 
+import collections.abc
 import inspect
 import logging
 import re
@@ -820,11 +821,25 @@ class YamlTransactionCase(_TransactionCase):  # type: ignore[misc]
         ids = getattr(value, "ids", None)
         if ids is not None:
             return list(ids)
-        if isinstance(value, (list, tuple, set)):
+        # ``Sequence`` rather than ``(list, tuple)`` so a ``Form``'s many2many
+        # value is accepted: Odoo 14's ``M2MProxy`` is a ``collections.abc.Sequence``
+        # of records with no ``.ids`` of its own. Text is a Sequence too and is
+        # never a record reference, so it is excluded explicitly.
+        if isinstance(value, set) or (
+            isinstance(value, collections.abc.Sequence) and not isinstance(value, (str, bytes))
+        ):
             result: List[int] = []
             for item in value:
                 result.extend(self._coerce_to_ids(item))
             return result
+        if type(value).__name__ == "O2MProxy":
+            # Odoo 14's O2MProxy exposes neither ids nor its records through a
+            # public API, and rows added in the form have no id at all yet.
+            raise YamlConfigurationError(
+                "Cannot read record ids from a one2many inside a form "
+                "(O2MProxy). Use check: 'count' there, or save the form "
+                "(save_as) and assert membership on the saved record."
+            )
         raise YamlConfigurationError(
             f"Cannot interpret {value!r} ({type(value).__name__}) as a record reference"
         )

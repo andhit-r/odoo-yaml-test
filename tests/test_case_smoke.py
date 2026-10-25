@@ -18,6 +18,7 @@ what lets us prove the auto-refresh feature actually fires.
 
 from __future__ import annotations
 
+import collections.abc
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, ClassVar, Iterator
@@ -1803,3 +1804,68 @@ scenarios:
         case = _make_case(tmp_path)
         _run(case, path)
         assert "journal" not in case.registry
+
+
+# ----------------------------------------------------------------------
+# x2many proxies of a Form
+# ----------------------------------------------------------------------
+
+
+class FakeM2MProxy(collections.abc.Sequence):  # type: ignore[type-arg]
+    """Odoo 14's ``M2MProxy``: a Sequence of records with no ``.ids``."""
+
+    def __init__(self, records: list[FakeRecord]) -> None:
+        self._records = records
+
+    def __getitem__(self, index: Any) -> Any:
+        return self._records[index]
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+
+class O2MProxy:
+    """Odoo 14's ``O2MProxy``: sized, but neither a Sequence nor ``.ids``.
+
+    Named exactly like Odoo's class because that name is what the library
+    keys its error message on.
+    """
+
+    def __len__(self) -> int:
+        return 1
+
+
+class TestCoerceFormProxies:
+    def test_m2m_proxy_yields_its_record_ids(self, tmp_path: Path) -> None:
+        case = _make_case(tmp_path)
+        a = FakeRecord(FakeModel("res.partner", case.env), {})
+        b = FakeRecord(FakeModel("res.partner", case.env), {})
+        assert case._coerce_to_ids(FakeM2MProxy([a, b])) == [a.id, b.id]
+
+    def test_empty_m2m_proxy_is_empty(self, tmp_path: Path) -> None:
+        case = _make_case(tmp_path)
+        assert case._coerce_to_ids(FakeM2MProxy([])) == []
+
+    def test_o2m_proxy_raises_with_a_workaround(self, tmp_path: Path) -> None:
+        case = _make_case(tmp_path)
+        with pytest.raises(YamlConfigurationError, match="one2many inside a form"):
+            case._coerce_to_ids(O2MProxy())
+
+    @pytest.mark.parametrize("value", ["res.partner", b"x", {"id": 1}])
+    def test_text_and_mappings_are_still_rejected(self, tmp_path: Path, value: Any) -> None:
+        case = _make_case(tmp_path)
+        with pytest.raises(YamlConfigurationError, match="Cannot interpret"):
+            case._coerce_to_ids(value)
+
+    def test_exact_membership_on_m2m_inside_form(self, tmp_path: Path) -> None:
+        case = _make_case(tmp_path)
+        tag = FakeRecord(FakeModel("res.partner.category", case.env), {})
+        other = FakeRecord(FakeModel("res.partner.category", case.env), {})
+        form = mock.Mock(_name="sale.order", tag_ids=FakeM2MProxy([tag]))
+        case._assert_relation(
+            form, "tag_ids", {"check": "exact", "expected_records": [tag]}, "many2many"
+        )
+        with pytest.raises(YamlAssertionError, match="expected exact ids"):
+            case._assert_relation(
+                form, "tag_ids", {"check": "exact", "expected_records": [other]}, "many2many"
+            )
