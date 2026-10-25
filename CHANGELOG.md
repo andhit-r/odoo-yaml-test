@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-25
+
 ### Fixed
 - **x2many membership asserts inside `action: form` no longer raise
   `Cannot interpret <M2MProxy …> as a record reference`.** Inside a form, a

@@ -17,7 +17,7 @@ Example:
 from .case import YamlTransactionCase
 from .exceptions import YamlAssertionError, YamlConfigurationError, YamlStepError
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = [
     "YamlAssertionError",
