@@ -9,3 +9,6 @@ from odoo_yaml_test import YamlTransactionCase
 class TestRefreshProbe(YamlTransactionCase):
     def test_refresh_clears_stale_compute(self):
         self.run_yaml_scenario("scenarios/refresh_probe.yaml")
+
+    def test_m2m_membership_inside_form(self):
+        self.run_yaml_scenario("scenarios/form_x2m_probe.yaml")
